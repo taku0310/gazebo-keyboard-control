@@ -1,0 +1,86 @@
+# Robot simulation stack: keyboard -> control logic -> gazebo, over ROS.
+#
+# Bring-up order is enforced with a healthcheck on ros_master so the other
+# nodes wait for roscore to actually be ready (not just for the container to
+# start). All services share the ros_net bridge and resolve each other by
+# service name via Docker's built-in DNS.
+version: '3.9'
+
+services:
+  # ---------------------------------------------------------------- #
+  # 1. ROS Master - node registration / topic discovery hub.
+  # ---------------------------------------------------------------- #
+  ros_master:
+    image: ros:noetic
+    command: roscore
+    ports:
+      - "11311:11311"
+    environment:
+      - ROS_MASTER_URI=http://ros_master:11311
+      - ROS_HOSTNAME=ros_master
+    networks:
+      - ros_net
+    healthcheck:
+      # roscore is ready once rosnode can list nodes (returns /rosout).
+      test: ["CMD-SHELL", "source /opt/ros/noetic/setup.bash && rosnode list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------- #
+  # 2. Keyboard Controller - keyboard input -> /cmd_vel (Twist).
+  #    Needs stdin/tty to capture keystrokes.
+  # ---------------------------------------------------------------- #
+  keyboard_controller:
+    build: ./keyboard_input
+    depends_on:
+      ros_master:
+        condition: service_healthy
+    environment:
+      - ROS_MASTER_URI=http://ros_master:11311
+      - ROS_HOSTNAME=keyboard_controller
+    networks:
+      - ros_net
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./scenarios:/app/scenarios
+
+  # ---------------------------------------------------------------- #
+  # 3. Control Logic - /cmd_vel -> safety constraints -> /gazebo/cmd_vel.
+  # ---------------------------------------------------------------- #
+  control_logic:
+    build: ./control_logic
+    depends_on:
+      ros_master:
+        condition: service_healthy
+    environment:
+      - ROS_MASTER_URI=http://ros_master:11311
+      - ROS_HOSTNAME=control_logic
+    networks:
+      - ros_net
+
+  # ---------------------------------------------------------------- #
+  # 4. Gazebo Simulator - subscribes /gazebo/cmd_vel, runs physics + web UI.
+  # ---------------------------------------------------------------- #
+  gazebo:
+    image: osrf/gazebo:ignition-fortress
+    depends_on:
+      ros_master:
+        condition: service_healthy
+    environment:
+      - ROS_MASTER_URI=http://ros_master:11311
+      - ROS_HOSTNAME=gazebo
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./gazebo_simulator/models:/root/.gazebo/models
+      - ./gazebo_simulator/worlds:/root/.gazebo/worlds
+    command: gazebo -g /root/.gazebo/worlds/empty.world
+    networks:
+      - ros_net
+
+networks:
+  ros_net:
+    driver: bridge
