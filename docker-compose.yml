@@ -65,19 +65,21 @@ services:
   # 4. Gazebo Simulator - subscribes /gazebo/cmd_vel, runs physics + web UI.
   # ---------------------------------------------------------------- #
   gazebo:
-    image: osrf/gazebo:ignition-fortress
+    # Built from gazebo_simulator/Dockerfile: Ignition Fortress + ROS Noetic +
+    # ros_ign bridge + noVNC web UI (the entrypoint launches all of them).
+    build: ./gazebo_simulator
     depends_on:
       ros_master:
         condition: service_healthy
     environment:
       - ROS_MASTER_URI=http://ros_master:11311
       - ROS_HOSTNAME=gazebo
+      - WORLD_FILE=/root/.gazebo/worlds/empty.world
     ports:
       - "8080:8080"
     volumes:
       - ./gazebo_simulator/models:/root/.gazebo/models
       - ./gazebo_simulator/worlds:/root/.gazebo/worlds
-    command: gazebo -g /root/.gazebo/worlds/empty.world
     networks:
       - ros_net
 
