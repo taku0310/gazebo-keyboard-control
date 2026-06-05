@@ -1,0 +1,95 @@
+name: CI
+
+# Fast, Docker-free checks: static validation of all artifacts plus the
+# headless control_logic unit tests. The full image build / Gazebo runtime is
+# intentionally out of scope here (heavy, and the ROS Noetic <-> Ignition
+# Fortress bridge needs a real Docker host to validate).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  validate:
+    name: Static validation & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Python syntax (compile all .py)
+        run: |
+          python -m compileall -q keyboard_input control_logic
+
+      - name: control_logic unit tests (headless)
+        run: |
+          python -m unittest discover -s control_logic/tests -v
+
+      - name: keyboard_controller scenario smoke test (dry-run)
+        run: |
+          # pynput is intentionally not installed; the module's lazy import
+          # falls back and --auto plays the scenario headlessly.
+          timeout 20 python keyboard_input/src/keyboard_input_controller.py \
+            --dry-run --auto --scenario scenarios/demo_scenario_01.json \
+            | tee /tmp/scn.log
+          grep -q "Scenario complete" /tmp/scn.log
+
+      - name: Validate scenario JSON
+        run: |
+          python - <<'PY'
+          import json, glob, sys
+          ok = True
+          for f in sorted(glob.glob("scenarios/*.json")):
+              try:
+                  d = json.load(open(f))
+                  assert "commands" in d and isinstance(d["commands"], list)
+                  ts = [c["timestamp"] for c in d["commands"]]
+                  assert ts == sorted(ts), "timestamps not sorted"
+                  for c in d["commands"]:
+                      assert abs(c["linear"]["x"]) <= 2.0
+                      assert abs(c["angular"]["z"]) <= 2.0
+                  print(f"OK  {f}  ({len(d['commands'])} commands)")
+              except Exception as e:
+                  ok = False
+                  print(f"ERR {f}: {e}")
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Validate XML (URDF / world / model.config)
+        run: |
+          python - <<'PY'
+          import xml.dom.minidom as m, glob, sys
+          ok = True
+          files = (glob.glob("gazebo_simulator/**/*.urdf", recursive=True)
+                   + glob.glob("gazebo_simulator/**/*.world", recursive=True)
+                   + glob.glob("gazebo_simulator/**/*.config", recursive=True))
+          for f in sorted(files):
+              try:
+                  m.parse(f)
+                  print(f"OK  {f}")
+              except Exception as e:
+                  ok = False
+                  print(f"ERR {f}: {e}")
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Shell script syntax (bash -n)
+        run: |
+          for s in run_keyboard.sh test_integration.sh gazebo_simulator/entrypoint.sh; do
+            bash -n "$s" && echo "OK  $s"
+          done
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          severity: error
+          additional_files: "run_keyboard.sh test_integration.sh"
+
+      - name: Validate docker-compose
+        run: |
+          docker compose config >/dev/null && echo "OK  docker-compose.yml"
