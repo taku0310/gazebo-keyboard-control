@@ -1,29 +1,35 @@
 {
-  "name": "demo_scenario_01",
-  "description": "Forward, turn, and stop - basic movement demo",
+  "name": "Simple Forward Motion",
+  "description": "ロボットが前進して回転する基本デモ",
   "duration_seconds": 10,
   "commands": [
     {
       "timestamp": 0.0,
-      "description": "Move forward",
+      "description": "前進",
       "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     },
     {
-      "timestamp": 3.0,
-      "description": "Turn left while moving",
+      "timestamp": 2.0,
+      "description": "前進継続",
       "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": 1.5}
+      "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+    },
+    {
+      "timestamp": 4.0,
+      "description": "右回転を加えて斜め進行",
+      "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.0}
     },
     {
       "timestamp": 6.0,
-      "description": "Straighten and slow down",
-      "linear": {"x": 0.5, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+      "description": "左回転",
+      "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": -1.0}
     },
     {
-      "timestamp": 9.0,
-      "description": "Stop",
+      "timestamp": 8.0,
+      "description": "停止",
       "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     }

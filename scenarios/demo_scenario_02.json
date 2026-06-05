@@ -1,53 +1,59 @@
 {
-  "name": "demo_scenario_02",
-  "description": "Square path - drive forward and turn 4 times",
-  "duration_seconds": 16,
+  "name": "Square Pattern",
+  "description": "ロボットが四角形を描く (1m x 1m, 各辺3秒前進+1秒で90度回転)",
+  "duration_seconds": 20,
   "commands": [
     {
       "timestamp": 0.0,
-      "description": "Side 1: forward",
-      "linear": {"x": 1.5, "y": 0.0, "z": 0.0},
+      "description": "辺1: 前進 (1m / 3s)",
+      "linear": {"x": 0.333, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     },
     {
       "timestamp": 3.0,
-      "description": "Corner 1: turn",
+      "description": "角1: 90度回転 (pi/2 rad / 1s)",
       "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": 2.0}
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.5708}
     },
     {
       "timestamp": 4.0,
-      "description": "Side 2: forward",
-      "linear": {"x": 1.5, "y": 0.0, "z": 0.0},
+      "description": "辺2: 前進 (1m / 3s)",
+      "linear": {"x": 0.333, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     },
     {
       "timestamp": 7.0,
-      "description": "Corner 2: turn",
+      "description": "角2: 90度回転 (pi/2 rad / 1s)",
       "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": 2.0}
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.5708}
     },
     {
       "timestamp": 8.0,
-      "description": "Side 3: forward",
-      "linear": {"x": 1.5, "y": 0.0, "z": 0.0},
+      "description": "辺3: 前進 (1m / 3s)",
+      "linear": {"x": 0.333, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     },
     {
       "timestamp": 11.0,
-      "description": "Corner 3: turn",
+      "description": "角3: 90度回転 (pi/2 rad / 1s)",
       "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": 2.0}
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.5708}
     },
     {
       "timestamp": 12.0,
-      "description": "Side 4: forward",
-      "linear": {"x": 1.5, "y": 0.0, "z": 0.0},
+      "description": "辺4: 前進 (1m / 3s)",
+      "linear": {"x": 0.333, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     },
     {
       "timestamp": 15.0,
-      "description": "Stop",
+      "description": "角4: 90度回転 (pi/2 rad / 1s)",
+      "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.5708}
+    },
+    {
+      "timestamp": 16.0,
+      "description": "停止 (四角形完成)",
       "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
       "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
     }
