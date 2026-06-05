@@ -88,7 +88,7 @@ jobs:
         with:
           scandir: "."
           severity: error
-          additional_files: "run_keyboard.sh test_integration.sh"
+          additional_files: "run_keyboard.sh test_integration.sh gazebo_simulator/entrypoint.sh"
 
       - name: Validate docker-compose
         run: |

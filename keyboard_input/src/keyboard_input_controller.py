@@ -340,6 +340,15 @@ class KeyboardController:
         while not rospy.is_shutdown():
             self.pub.publish(self._make_twist())
             rate.sleep()
+        # Send a final zero command so the robot stops instead of coasting on
+        # the last velocity after the node shuts down.
+        with self._state_lock:
+            self.linear_x = 0.0
+            self.angular_z = 0.0
+        try:
+            self.pub.publish(self._make_twist())
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Lifecycle

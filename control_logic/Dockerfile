@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
-RUN pip3 install --no-cache-dir -r /app/requirements.txt || true
+# requirements.txt is std-lib-only today; install real deps if any are added
+# (no `|| true` so a genuine install failure surfaces instead of being masked).
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 COPY src/ /app/src/
 

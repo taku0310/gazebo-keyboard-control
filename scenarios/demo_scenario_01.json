@@ -19,13 +19,13 @@
       "timestamp": 4.0,
       "description": "右回転を加えて斜め進行",
       "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": 1.0}
+      "angular": {"x": 0.0, "y": 0.0, "z": -1.0}
     },
     {
       "timestamp": 6.0,
       "description": "左回転",
       "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
-      "angular": {"x": 0.0, "y": 0.0, "z": -1.0}
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.0}
     },
     {
       "timestamp": 8.0,

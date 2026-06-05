@@ -126,20 +126,32 @@ echo "════════════════════════�
 # ============================================================================ #
 section "Test 1: Container Startup"
 
-echo "  🚀 Starting stack (docker compose up -d)..."
-if ! dc up -d >/dev/null 2>&1; then
-  fail "└─" "docker compose up failed" "$(dc up -d 2>&1 | tail -3)"
+# Start only the long-lived backing services. keyboard_controller is launched
+# on demand via `compose run` (Test 4): its default container has no display,
+# so a headless `up -d` instance would exit immediately - checking it for
+# "running" here would be a guaranteed false failure.
+echo "  🚀 Starting backing services (docker compose up -d)..."
+if ! dc up -d ros_master control_logic gazebo >/dev/null 2>&1; then
+  fail "└─" "docker compose up failed" "$(dc up -d ros_master control_logic gazebo 2>&1 | tail -3)"
 else
   # Give roscore a moment (compose healthcheck also gates dependents).
   wait_for 30 ros_cli "rostopic list" || true
 
-  for svc in ros_master keyboard_controller control_logic; do
+  for svc in ros_master control_logic; do
     if is_running "$svc"; then
       pass "├─" "$svc running"
     else
       fail "├─" "$svc not running" "$(dc logs --tail 5 "$svc" 2>&1 | tail -3)"
     fi
   done
+
+  # keyboard_controller is run on demand, not kept up; verify it is runnable.
+  if dc run --rm -T keyboard_controller python3 -c "import sys; sys.exit(0)" \
+       >/dev/null 2>&1; then
+    pass "├─" "keyboard_controller runnable (compose run)"
+  else
+    fail "├─" "keyboard_controller image not runnable"
+  fi
 
   # gazebo may not be runnable yet (image/bridge WIP) -> warn, don't fail.
   if is_running gazebo; then

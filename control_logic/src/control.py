@@ -245,21 +245,32 @@ class ControlLogic:
     # ------------------------------------------------------------------ #
     # Control loop
     # ------------------------------------------------------------------ #
+    def _publish_stop(self):
+        """Publish a single zero-velocity command so the robot halts."""
+        self.cur_linear = 0.0
+        self.cur_angular = 0.0
+        self.filt_linear = 0.0
+        self.filt_angular = 0.0
+        self._publish(0.0, 0.0)
+
     def spin(self):
         if self.dry_run:
             print("⚠️  dry-run: control loop not started "
                   "(use process() directly for testing).")
             return
+        # Halt the robot on shutdown so it does not keep moving with the last
+        # commanded velocity after the node dies (Ctrl+C / signal_shutdown).
+        rospy.on_shutdown(self._publish_stop)
         rate = rospy.Rate(self.control_rate_hz)
-        warned_latency = False
         while not rospy.is_shutdown():
             linear, angular = self.process(self.target_linear,
                                            self.target_angular)
             self._publish(linear, angular)
-            if self.last_proc_ms > 10.0 and not warned_latency:
-                rospy.logwarn("control_logic processing %.2f ms > 10 ms budget",
-                              self.last_proc_ms)
-                warned_latency = True
+            if self.last_proc_ms > 10.0:
+                self._log_throttled(
+                    "latency",
+                    "⚠️  control_logic processing %.2f ms > 10 ms budget"
+                    % self.last_proc_ms)
             rate.sleep()
 
 
