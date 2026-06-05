@@ -1,0 +1,11 @@
+# Control Logic container Python dependencies
+#
+# rospy, geometry_msgs and std_msgs ship with the ROS noetic base image and
+# are resolved via the sourced ROS environment, not pip. Listed for reference.
+#
+# rospy            (provided by ros:noetic)
+# geometry_msgs    (provided by ros:noetic)
+# std_msgs         (provided by ros:noetic)
+#
+# No third-party pip dependencies; the node uses only the Python standard
+# library plus ROS. This file is intentionally minimal.
