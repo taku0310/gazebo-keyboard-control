@@ -5,7 +5,8 @@ a constraint pipeline, and republishes the safe result to `/gazebo/cmd_vel`
 for the simulator.
 
 - **Node name:** `control_logic`
-- **Subscribes:** `/cmd_vel` (`geometry_msgs/Twist`), `/emergency_stop` (`std_msgs/Bool`, optional)
+- **Subscribes:** `/cmd_vel` (`geometry_msgs/Twist`), `/emergency_stop`
+  (`std_msgs/Bool`, optional), `/contact` (`std_msgs/Bool`, optional)
 - **Publishes:** `/gazebo/cmd_vel` (`geometry_msgs/Twist`)
 - **Rate:** 20 Hz, < 10 ms processing latency per cycle
 
@@ -18,8 +19,12 @@ for the simulator.
    `max_accel` (1.0 m/s²) / `max_angular_accel` (1.0 rad/s²). This is normal
    smoothing and is not logged per cycle.
 3. **Exponential smoothing** — low-pass filter, `alpha = 0.3`.
-4. **Safety rules** — `/emergency_stop` forces the target to zero; combined
-   with the acceleration limit this produces a smooth, bounded deceleration.
+4. **Safety rules** — two triggers force the target to zero, and combined with
+   the acceleration limit they produce a smooth, bounded deceleration:
+   - **Emergency stop** — `/emergency_stop` (`std_msgs/Bool`).
+   - **Contact stop (optional)** — `/contact` (`std_msgs/Bool`), e.g. from a
+     bumper/collision sensor. Enabled by default; disable with
+     `--no-contact-stop`.
 
 The output is re-clipped after filtering as a defensive measure.
 
@@ -53,8 +58,20 @@ rostopic hz   /gazebo/cmd_vel     # ~20 Hz
 
 # Emergency stop:
 rostopic pub /emergency_stop std_msgs/Bool 'data: true'
+
+# Contact-triggered stop (optional, on by default):
+rostopic pub /contact std_msgs/Bool 'data: true'
 ```
 
 The constraint pipeline is implemented in `process()`, which is pure enough to
 unit-test directly (feed targets, inspect returned `(linear, angular)` and
 `last_proc_ms`).
+
+### Unit tests
+
+Headless tests (no ROS needed) cover velocity/accel limits, emergency stop,
+contact stop, and the latency budget:
+
+```bash
+python3 -m unittest discover -s control_logic/tests
+```

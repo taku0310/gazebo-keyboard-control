@@ -36,6 +36,7 @@ NODE_NAME = "control_logic"
 INPUT_TOPIC = "/cmd_vel"
 OUTPUT_TOPIC = "/gazebo/cmd_vel"
 ESTOP_TOPIC = "/emergency_stop"
+CONTACT_TOPIC = "/contact"
 CONTROL_RATE_HZ = 20.0
 
 DEFAULT_MAX_LINEAR_SPEED = 2.0    # m/s
@@ -74,7 +75,9 @@ class ControlLogic:
                  max_angular_accel=DEFAULT_MAX_ANGULAR_ACCEL,
                  alpha=DEFAULT_ALPHA,
                  control_rate_hz=CONTROL_RATE_HZ,
+                 enable_contact_stop=True,
                  dry_run=False):
+        self.enable_contact_stop = enable_contact_stop
         self.max_linear_speed = max_linear_speed
         self.max_angular_speed = max_angular_speed
         self.max_accel = max_accel
@@ -98,6 +101,7 @@ class ControlLogic:
 
         # Safety
         self.emergency_stop = False
+        self.contact = False
 
         # Diagnostics
         self.last_proc_ms = 0.0
@@ -111,6 +115,7 @@ class ControlLogic:
         self.pub = None
         self.sub = None
         self.estop_sub = None
+        self.contact_sub = None
 
         if not self.dry_run:
             rospy.init_node(NODE_NAME, anonymous=False)
@@ -119,8 +124,13 @@ class ControlLogic:
                                         self.cmd_vel_callback, queue_size=10)
             self.estop_sub = rospy.Subscriber(ESTOP_TOPIC, Bool,
                                               self.estop_callback, queue_size=1)
-            rospy.loginfo("control_logic started: %s -> %s @ %.0f Hz",
-                          INPUT_TOPIC, OUTPUT_TOPIC, control_rate_hz)
+            if self.enable_contact_stop:
+                self.contact_sub = rospy.Subscriber(
+                    CONTACT_TOPIC, Bool, self.contact_callback, queue_size=1)
+            rospy.loginfo("control_logic started: %s -> %s @ %.0f Hz "
+                          "(contact_stop=%s)",
+                          INPUT_TOPIC, OUTPUT_TOPIC, control_rate_hz,
+                          self.enable_contact_stop)
         else:
             print("⚠️  control_logic running in dry-run mode (no ROS).")
 
@@ -140,6 +150,15 @@ class ControlLogic:
         elif not engaged and self.emergency_stop:
             print("✅ Emergency stop released.")
         self.emergency_stop = engaged
+
+    def contact_callback(self, msg):
+        """Force a stop while a contact/collision is reported (optional)."""
+        touching = bool(msg.data)
+        if touching and not self.contact:
+            print("🚧 Contact detected -> forcing stop.")
+        elif not touching and self.contact:
+            print("✅ Contact cleared.")
+        self.contact = touching
 
     def _log_throttled(self, category, message):
         """Print ``message`` at most once per ``_log_interval`` per category."""
@@ -161,8 +180,8 @@ class ControlLogic:
         """
         start = time.perf_counter()
 
-        # --- Safety: emergency stop overrides everything ---------------- #
-        if self.emergency_stop:
+        # --- Safety: emergency stop / contact override everything ------- #
+        if self.emergency_stop or (self.enable_contact_stop and self.contact):
             target_linear = 0.0
             target_angular = 0.0
 
@@ -255,6 +274,8 @@ def parse_args(argv=None):
                         default=DEFAULT_MAX_ANGULAR_ACCEL)
     parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
     parser.add_argument("--rate", type=float, default=CONTROL_RATE_HZ)
+    parser.add_argument("--no-contact-stop", action="store_true",
+                        help="Disable the optional contact-triggered stop.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run without ROS (for local testing).")
     args, _unknown = parser.parse_known_args(argv)
@@ -270,6 +291,7 @@ def main(argv=None):
         max_angular_accel=args.max_angular_accel,
         alpha=args.alpha,
         control_rate_hz=args.rate,
+        enable_contact_stop=not args.no_contact_stop,
         dry_run=args.dry_run,
     )
     node.spin()
