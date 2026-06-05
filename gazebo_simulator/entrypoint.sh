@@ -36,18 +36,30 @@ else
 fi
 
 echo "🔗 Starting ROS1 <-> Ignition bridge..."
-rosrun ros_ign_bridge parameter_bridge \
-  "/gazebo/cmd_vel@geometry_msgs/Twist]ignition.msgs.Twist" \
-  "/odom@nav_msgs/Odometry[ignition.msgs.Odometry" \
-  "/imu@sensor_msgs/Imu[ignition.msgs.IMU" \
-  "/clock@rosgraph_msgs/Clock[ignition.msgs.Clock" \
-  &
-BRIDGE_PID=$!
+# The bridge is backgrounded, so its failure would not trip `set -e` and would
+# otherwise die silently, leaving /gazebo/cmd_vel unbridged. Check the package
+# is present first and warn loudly if not (see the source-build fallback in the
+# Dockerfile for Noetic+Fortress).
+if rospack find ros_ign_bridge >/dev/null 2>&1; then
+  rosrun ros_ign_bridge parameter_bridge \
+    "/gazebo/cmd_vel@geometry_msgs/Twist]ignition.msgs.Twist" \
+    "/odom@nav_msgs/Odometry[ignition.msgs.Odometry" \
+    "/imu@sensor_msgs/Imu[ignition.msgs.IMU" \
+    "/clock@rosgraph_msgs/Clock[ignition.msgs.Clock" \
+    &
+  BRIDGE_PID=$!
+else
+  echo "❌ ros_ign_bridge not found: /gazebo/cmd_vel will NOT reach Ignition" >&2
+  echo "   and no /odom,/imu,/clock will be published back to ROS." >&2
+  echo "   Enable the source-build fallback in gazebo_simulator/Dockerfile" >&2
+  echo "   (IGNITION_VERSION=fortress). Continuing with visualization only." >&2
+  BRIDGE_PID=""
+fi
 
 # Stop background jobs cleanly on exit.
 cleanup() {
   echo "🧹 Stopping Gazebo container services..."
-  kill "${BRIDGE_PID}" 2>/dev/null || true
+  [ -n "${BRIDGE_PID}" ] && kill "${BRIDGE_PID}" 2>/dev/null || true
   pkill -x x11vnc 2>/dev/null || true
   pkill -f websockify 2>/dev/null || true
   pkill -x Xvfb 2>/dev/null || true

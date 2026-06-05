@@ -411,8 +411,13 @@ def parse_args(argv=None):
                         help="Do not ignore manual keys while a scenario runs.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run without ROS (for local testing).")
-    # rospy may inject __name/__log args; ignore unknowns.
-    args, _unknown = parser.parse_known_args(argv)
+    # rospy injects ROS-style args (e.g. __name:=, __log:=) that contain ":=";
+    # tolerate those but warn about any other unknown args so typos like
+    # "--scenrio" are not silently ignored.
+    args, unknown = parser.parse_known_args(argv)
+    stray = [a for a in unknown if ":=" not in a]
+    if stray:
+        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(stray))
     return args
 
 

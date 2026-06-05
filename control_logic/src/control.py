@@ -289,7 +289,12 @@ def parse_args(argv=None):
                         help="Disable the optional contact-triggered stop.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run without ROS (for local testing).")
-    args, _unknown = parser.parse_known_args(argv)
+    # Tolerate ROS-injected args (e.g. __name:=, __log:=) which contain ":=",
+    # but warn about other unknown args so typos are not silently ignored.
+    args, unknown = parser.parse_known_args(argv)
+    stray = [a for a in unknown if ":=" not in a]
+    if stray:
+        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(stray))
     return args
 
 
