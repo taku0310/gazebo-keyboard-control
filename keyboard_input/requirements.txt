@@ -1,0 +1,10 @@
+# Keyboard Controller container Python dependencies
+#
+# Note: rospy / geometry_msgs ship with the ROS noetic base image and are
+# resolved via the ROS environment (sourced setup.bash), not pip. They are
+# listed here for documentation only.
+#
+# rospy            (provided by ros:noetic)
+# geometry_msgs    (provided by ros:noetic)
+
+pynput==1.7.6

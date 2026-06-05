@@ -1,0 +1,31 @@
+{
+  "name": "demo_scenario_01",
+  "description": "Forward, turn, and stop - basic movement demo",
+  "duration_seconds": 10,
+  "commands": [
+    {
+      "timestamp": 0.0,
+      "description": "Move forward",
+      "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+    },
+    {
+      "timestamp": 3.0,
+      "description": "Turn left while moving",
+      "linear": {"x": 1.0, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": 1.5}
+    },
+    {
+      "timestamp": 6.0,
+      "description": "Straighten and slow down",
+      "linear": {"x": 0.5, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+    },
+    {
+      "timestamp": 9.0,
+      "description": "Stop",
+      "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
+      "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+    }
+  ]
+}
