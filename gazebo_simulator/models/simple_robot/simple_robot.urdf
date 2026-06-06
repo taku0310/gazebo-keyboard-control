@@ -20,10 +20,9 @@
      must spin without end stops -> "continuous" (revolute requires position
      limits). The 5 rad/s cap is kept as the joint velocity limit.
 
-  Targets ROS Noetic URDF grammar and Gazebo (Ignition) Fortress. The
-  differential-drive / IMU plugins below are the Ignition systems; for Gazebo
-  Classic + Noetic, swap to libgazebo_ros_diff_drive.so (commented example
-  included). ROS1 <-> Ignition topics are bridged with ros_gz_bridge.
+  Targets ROS 2 (Jazzy) and Gazebo Sim Harmonic. The differential-drive and
+  IMU below use the gz-sim systems; Gazebo <-> ROS 2 topics are bridged with
+  ros_gz_bridge (see gazebo_simulator/entrypoint.sh).
 -->
 <robot name="simple_robot">
 
@@ -161,36 +160,32 @@
     <origin xyz="0.2 0 -0.11" rpy="0 0 0"/>
   </joint>
 
-  <!-- ===================== Gazebo material / friction ================== -->
-  <gazebo reference="base_link">
-    <material>Gazebo/Gray</material>
-  </gazebo>
-
+  <!-- ===================== Friction (sdformat URDF extension) ========== -->
+  <!-- Visual colors come from the <visual><material> above; gz-sim uses those
+       directly (the Gazebo-Classic material scripts do not apply). mu1/mu2 are
+       translated to surface friction by the sdformat URDF parser. -->
   <gazebo reference="left_wheel">
-    <material>Gazebo/Black</material>
     <mu1>1.0</mu1>
     <mu2>1.0</mu2>
   </gazebo>
 
   <gazebo reference="right_wheel">
-    <material>Gazebo/Black</material>
     <mu1>1.0</mu1>
     <mu2>1.0</mu2>
   </gazebo>
 
   <!-- Caster is nearly frictionless so it slides freely. -->
   <gazebo reference="caster">
-    <material>Gazebo/DarkGray</material>
     <mu1>0.0</mu1>
     <mu2>0.0</mu2>
   </gazebo>
 
-  <!-- ================ Differential drive (Ignition Fortress) =========== -->
+  <!-- ================ Differential drive (Gazebo Harmonic) ============= -->
   <!-- Subscribes to /gazebo/cmd_vel (output of the control_logic node) and
        publishes wheel odometry on /odom. -->
   <gazebo>
-    <plugin filename="ignition-gazebo-diff-drive-system"
-            name="ignition::gazebo::systems::DiffDrive">
+    <plugin filename="gz-sim-diff-drive-system"
+            name="gz::sim::systems::DiffDrive">
       <left_joint>left_wheel_joint</left_joint>
       <right_joint>right_wheel_joint</right_joint>
       <wheel_separation>0.3</wheel_separation>
@@ -231,25 +226,5 @@
     </sensor>
   </gazebo>
 
-  <!--
-    Gazebo Classic + ROS Noetic alternative (use instead of the Ignition
-    DiffDrive plugin above if running classic Gazebo):
-
-    <gazebo>
-      <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
-        <ros><namespace>/</namespace></ros>
-        <left_joint>left_wheel_joint</left_joint>
-        <right_joint>right_wheel_joint</right_joint>
-        <wheel_separation>0.3</wheel_separation>
-        <wheel_diameter>0.1</wheel_diameter>
-        <command_topic>/gazebo/cmd_vel</command_topic>
-        <odometry_topic>/odom</odometry_topic>
-        <odometry_frame>odom</odometry_frame>
-        <robot_base_frame>base_link</robot_base_frame>
-        <publish_odom>true</publish_odom>
-        <max_wheel_torque>10.0</max_wheel_torque>
-      </plugin>
-    </gazebo>
-  -->
 
 </robot>

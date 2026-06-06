@@ -133,18 +133,18 @@ trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------- #
 # Start the backing services (everything except keyboard_controller).
+# ROS 2 is masterless - there is no roscore; nodes discover over DDS.
 # ---------------------------------------------------------------------------- #
-echo "🚀 Starting backing services (ros_master, control_logic, gazebo)..."
-if ! "${COMPOSE[@]}" up -d ros_master control_logic gazebo; then
+echo "🚀 Starting backing services (control_logic, gazebo)..."
+if ! "${COMPOSE[@]}" up -d control_logic gazebo; then
   echo "❌ Failed to start services. See output above."
   exit 1
 fi
 
-# Wait for ROS Master to come up (spec: ~3s). The compose healthcheck already
-# gates dependents, but we give roscore a moment before attaching.
-echo "⏳ Waiting for ROS Master (roscore)..."
+# Give the services a moment to come up and discover each other over DDS.
+echo "⏳ Waiting for services (ROS 2 DDS discovery)..."
 sleep 3
-echo "✅ ROS Master should be up."
+echo "✅ Services should be up."
 
 # ---------------------------------------------------------------------------- #
 # Build the keyboard controller command.

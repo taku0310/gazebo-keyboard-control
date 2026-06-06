@@ -76,10 +76,10 @@ fi
 
 dc() { "${COMPOSE[@]}" "$@"; }
 
-# Run a ROS CLI command inside the (running) control_logic container, which
-# ships rospy and the ROS CLI. Sources the ROS environment first.
+# Run a ROS 2 CLI command inside the (running) control_logic container, which
+# ships rclpy and the ROS 2 CLI. Sources the ROS 2 environment first.
 ros_cli() {
-  dc exec -T control_logic bash -lc "source /opt/ros/noetic/setup.bash && $*" 2>/dev/null
+  dc exec -T control_logic bash -lc "source /opt/ros/jazzy/setup.bash && $*" 2>/dev/null
 }
 
 # Poll until a command succeeds or timeout (seconds) elapses.
@@ -131,19 +131,17 @@ section "Test 1: Container Startup"
 # so a headless `up -d` instance would exit immediately - checking it for
 # "running" here would be a guaranteed false failure.
 echo "  🚀 Starting backing services (docker compose up -d)..."
-if ! dc up -d ros_master control_logic gazebo >/dev/null 2>&1; then
-  fail "└─" "docker compose up failed" "$(dc up -d ros_master control_logic gazebo 2>&1 | tail -3)"
+if ! dc up -d control_logic gazebo >/dev/null 2>&1; then
+  fail "└─" "docker compose up failed" "$(dc up -d control_logic gazebo 2>&1 | tail -3)"
 else
-  # Give roscore a moment (compose healthcheck also gates dependents).
-  wait_for 30 ros_cli "rostopic list" || true
+  # ROS 2 is masterless; wait until the CLI can list topics over DDS.
+  wait_for 30 ros_cli "ros2 topic list" || true
 
-  for svc in ros_master control_logic; do
-    if is_running "$svc"; then
-      pass "├─" "$svc running"
-    else
-      fail "├─" "$svc not running" "$(dc logs --tail 5 "$svc" 2>&1 | tail -3)"
-    fi
-  done
+  if is_running control_logic; then
+    pass "├─" "control_logic running"
+  else
+    fail "├─" "control_logic not running" "$(dc logs --tail 5 control_logic 2>&1 | tail -3)"
+  fi
 
   # keyboard_controller is run on demand, not kept up; verify it is runnable.
   if dc run --rm -T keyboard_controller python3 -c "import sys; sys.exit(0)" \
@@ -153,19 +151,19 @@ else
     fail "├─" "keyboard_controller image not runnable"
   fi
 
-  # gazebo may not be runnable yet (image/bridge WIP) -> warn, don't fail.
+  # gazebo may not be runnable yet (heavy image) -> warn, don't fail.
   if is_running gazebo; then
     pass "├─" "gazebo running"
   else
-    warn "├─" "gazebo not running (image/bridge still WIP)" \
+    warn "├─" "gazebo not running (heavy image)" \
       "build the gazebo container to enable full E2E"
   fi
 
-  # ROS Master port 11311.
-  if ros_cli "rostopic list" >/dev/null 2>&1; then
-    pass "├─" "ROS Master listening on 11311"
+  # ROS 2 discovery: the CLI can enumerate topics.
+  if ros_cli "ros2 topic list" >/dev/null 2>&1; then
+    pass "├─" "ROS 2 discovery working (ros2 topic list)"
   else
-    fail "├─" "ROS Master not responding on 11311"
+    fail "├─" "ROS 2 CLI cannot list topics"
   fi
 
   # Gazebo web UI port 8080.
@@ -173,7 +171,7 @@ else
     pass "└─" "Gazebo Web UI listening on 8080"
   else
     warn "└─" "Gazebo Web UI not reachable on 8080" \
-      "expected once the gazebo container + gzweb are running"
+      "expected once the gazebo container + noVNC are running"
   fi
 fi
 
@@ -184,22 +182,22 @@ section "Test 2: ROS Communication"
 
 # Publish a test command on /cmd_vel for a few seconds (auto-stops via timeout).
 dc exec -d control_logic bash -lc \
-  "source /opt/ros/noetic/setup.bash && \
-   timeout 12 rostopic pub -r 10 /cmd_vel geometry_msgs/Twist \
+  "source /opt/ros/jazzy/setup.bash && \
+   timeout 12 ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist \
    '{linear: {x: 1.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.5}}'" \
   >/dev/null 2>&1 || true
 sleep 3
 
 # /cmd_vel exists.
-if ros_cli "rostopic list" | grep -q "^/cmd_vel$"; then
+if ros_cli "ros2 topic list" | grep -q "^/cmd_vel$"; then
   pass "├─" "/cmd_vel topic exists"
 else
   fail "├─" "/cmd_vel topic missing"
 fi
 
-# Publisher active: check the Publishers block of `rostopic info` is non-empty.
-if ros_cli "rostopic info /cmd_vel" | \
-   awk '/Publishers:/{p=1;next} /Subscribers:/{p=0} p&&/\*/{f=1} END{exit !f}'; then
+# Publisher active: `ros2 topic info` reports a non-zero publisher count.
+if ros_cli "ros2 topic info /cmd_vel" | \
+   awk -F': ' '/Publisher count/{exit !($2 > 0)}'; then
   pass "├─" "Publisher active on /cmd_vel"
 else
   fail "├─" "No publisher on /cmd_vel"
@@ -207,18 +205,18 @@ fi
 
 # Subscriber active: control_logic republishes to /gazebo/cmd_vel, so receiving
 # one message there proves it subscribed to /cmd_vel and processed it.
-if ros_cli "timeout 5 rostopic echo -n1 /gazebo/cmd_vel" | grep -q "linear:"; then
+if ros_cli "timeout 5 ros2 topic echo --once /gazebo/cmd_vel" | grep -q "linear:"; then
   pass "├─" "Subscriber active (control_logic -> /gazebo/cmd_vel)"
 else
   fail "├─" "control_logic did not republish to /gazebo/cmd_vel"
 fi
 
-# Gazebo receives commands: a ROS subscriber on /gazebo/cmd_vel (the bridge).
-if ros_cli "rostopic info /gazebo/cmd_vel" | grep -qi "Subscribers:" \
-   && ros_cli "rostopic info /gazebo/cmd_vel" | grep -qi "gazebo\|bridge"; then
-  pass "└─" "Gazebo subscribed to /gazebo/cmd_vel"
+# Gazebo receives commands: the ros_gz bridge subscribes to /gazebo/cmd_vel.
+if ros_cli "ros2 topic info /gazebo/cmd_vel" | \
+   awk -F': ' '/Subscription count/{exit !($2 > 0)}'; then
+  pass "└─" "Gazebo/bridge subscribed to /gazebo/cmd_vel"
 else
-  warn "└─" "No Gazebo subscriber on /gazebo/cmd_vel" \
+  warn "└─" "No subscriber on /gazebo/cmd_vel" \
     "needs the gazebo container + ros_gz_bridge"
 fi
 
@@ -230,35 +228,37 @@ section "Test 3: Latency Measurement"
 # Measure /cmd_vel -> /gazebo/cmd_vel propagation (keyboard publish rate +
 # control_logic processing). Run a probe node inside control_logic.
 LAT_OUT="$(dc exec -T control_logic bash -lc \
-  "source /opt/ros/noetic/setup.bash && python3 -" <<'PY' 2>/dev/null
+  "source /opt/ros/jazzy/setup.bash && python3 -" <<'PY' 2>/dev/null
 import time
-import rospy
+import rclpy
+from rclpy.node import Node
 from geometry_msgs.msg import Twist
 
-rospy.init_node("latency_probe", anonymous=True, disable_signals=True)
+rclpy.init()
+node = Node("latency_probe")
 state = {}
 
 def cb(msg):
     if abs(msg.linear.x) > 1e-3 and "t1" not in state:
         state["t1"] = time.time()
 
-rospy.Subscriber("/gazebo/cmd_vel", Twist, cb)
-pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
-time.sleep(1.0)  # let connections establish
+node.create_subscription(Twist, "/gazebo/cmd_vel", cb, 10)
+pub = node.create_publisher(Twist, "/cmd_vel", 10)
+time.sleep(1.0)  # let discovery / connections establish
 
 m = Twist()
 m.linear.x = 1.0
 state["t0"] = time.time()
-rate = rospy.Rate(50)
 deadline = time.time() + 5.0
 while time.time() < deadline and "t1" not in state:
     pub.publish(m)
-    rate.sleep()
+    rclpy.spin_once(node, timeout_sec=0.02)
 
 if "t1" in state:
     print("LATENCY_MS=%.1f" % ((state["t1"] - state["t0"]) * 1000.0))
 else:
     print("LATENCY_MS=TIMEOUT")
+rclpy.shutdown()
 PY
 )"
 

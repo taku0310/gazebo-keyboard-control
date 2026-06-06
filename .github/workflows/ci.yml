@@ -2,8 +2,8 @@ name: CI
 
 # Fast, Docker-free checks: static validation of all artifacts plus the
 # headless control_logic unit tests. The full image build / Gazebo runtime is
-# intentionally out of scope here (heavy, and the ROS Noetic <-> Ignition
-# Fortress bridge needs a real Docker host to validate).
+# intentionally out of scope here (heavy, and the ROS 2 Jazzy + Gazebo Harmonic
+# stack needs a real Docker host to validate).
 on:
   push:
     branches: ["**"]

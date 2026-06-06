@@ -106,18 +106,19 @@ function Stop-Stack {
 
 try {
     # ----------------------------------------------------------------------- #
-    # Start backing services detached.
+    # Start backing services detached. ROS 2 is masterless (DDS discovery);
+    # there is no roscore container.
     # ----------------------------------------------------------------------- #
-    Write-Host "🚀 Starting backing services (ros_master, control_logic, gazebo)..."
-    Invoke-Compose @("up", "-d", "ros_master", "control_logic", "gazebo")
+    Write-Host "🚀 Starting backing services (control_logic, gazebo)..."
+    Invoke-Compose @("up", "-d", "control_logic", "gazebo")
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to start services."
     }
 
-    # Wait for ROS Master (spec: ~3s).
-    Write-Host "⏳ Waiting for ROS Master (roscore)..."
+    # Give the services a moment to come up and discover over DDS.
+    Write-Host "⏳ Waiting for services (ROS 2 DDS discovery)..."
     Start-Sleep -Seconds 3
-    Write-Host "✅ ROS Master should be up."
+    Write-Host "✅ Services should be up."
 
     # ----------------------------------------------------------------------- #
     # Build the keyboard controller command.

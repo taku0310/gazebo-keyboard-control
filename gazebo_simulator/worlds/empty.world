@@ -2,22 +2,20 @@
 <!--
   empty.world - flat ground demo world for simple_robot.
 
-  Spec is SDF v1.6 with an ODE solver (max_step_size 0.001, 50 iterations,
-  contacts enabled), a 100x100 ground plane, a zenith sun, white ambient light
-  and a light-blue sky background.
+  SDF world with an ODE solver (max_step_size 0.001, 50 iterations, contacts
+  enabled), a 100x100 ground plane, a zenith sun, white ambient light and a
+  light-blue sky background.
 
-  The target runtime is Gazebo (Ignition) Fortress, so the Ignition system
-  plugins (Physics, UserCommands, SceneBroadcaster, Sensors, Contact) are
-  declared here - Sensors is required for the robot's IMU, Contact for the
-  collision/contact detection that feeds control_logic's /contact stop.
+  The target runtime is Gazebo Sim Harmonic, so the gz-sim system plugins
+  (Physics, UserCommands, SceneBroadcaster, Sensors, Imu, Contact) are declared
+  here - Sensors + Imu produce the robot's IMU, Contact the collision/contact
+  detection that feeds control_logic's /contact stop.
 
-  Note: Fortress's default physics engine is DART, not ODE; the <physics
+  Note: Harmonic's default physics engine is DART, not ODE; the <physics
   type="ode"> block and its solver settings are honored where the engine
-  supports them (step size always applies). For Gazebo Classic + ROS Noetic
-  these ODE settings map directly. SDF 1.7/1.8 is more idiomatic for Fortress,
-  but 1.6 is used here per spec and parses fine.
+  supports them (step size always applies).
 -->
-<sdf version="1.6">
+<sdf version="1.8">
   <world name="empty">
 
     <!-- ============================ Physics ============================ -->
@@ -40,21 +38,23 @@
       </ode>
     </physics>
 
-    <!-- ==================== Ignition Fortress systems ================== -->
-    <plugin filename="ignition-gazebo-physics-system"
-            name="ignition::gazebo::systems::Physics"/>
-    <plugin filename="ignition-gazebo-user-commands-system"
-            name="ignition::gazebo::systems::UserCommands"/>
-    <plugin filename="ignition-gazebo-scene-broadcaster-system"
-            name="ignition::gazebo::systems::SceneBroadcaster"/>
-    <!-- Sensors system renders/produces the IMU defined in the robot URDF. -->
-    <plugin filename="ignition-gazebo-sensors-system"
-            name="ignition::gazebo::systems::Sensors">
+    <!-- ==================== Gazebo Sim (Harmonic) systems ============== -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <!-- Sensors renders sensor data; Imu produces the IMU in the robot URDF. -->
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
     <!-- Contact system enables collision/contact reporting. -->
-    <plugin filename="ignition-gazebo-contact-system"
-            name="ignition::gazebo::systems::Contact"/>
+    <plugin filename="gz-sim-contact-system"
+            name="gz::sim::systems::Contact"/>
 
     <!-- ============================ Gravity =========================== -->
     <gravity>0 0 -9.81</gravity>

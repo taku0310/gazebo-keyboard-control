@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Keyboard Controller node.
+"""Keyboard Controller node (ROS 2 / rclpy).
 
 Reads keyboard input via pynput (cross-platform: macOS / Windows / Linux),
-converts it into geometry_msgs/Twist messages and publishes them to the
+converts it into geometry_msgs/msg/Twist messages and publishes them to the
 ``/cmd_vel`` topic at a fixed rate (20 Hz).
 
 Also supports replaying a recorded scenario from a JSON file so that demos
@@ -13,13 +13,13 @@ Key bindings
 ------------
 W / Up      : linear.x  = +max_speed
 S / Down    : linear.x  = -max_speed
-A / Left    : angular.z = +max_speed
-D / Right   : angular.z = -max_speed
+A / Left    : angular.z = +max_speed  (left / CCW, REP-103)
+D / Right   : angular.z = -max_speed  (right / CW)
 + / =       : max_speed *= 1.1  (speed scale up)
 - / _       : max_speed /= 1.1  (speed scale down)
 SPACE       : play the JSON scenario file
 R           : reset velocities (linear.x = 0, angular.z = 0)
-Q / ESC     : quit (rospy.signal_shutdown)
+Q / ESC     : quit
 """
 
 import argparse
@@ -29,16 +29,18 @@ import sys
 import threading
 import time
 
+# rclpy is imported lazily/guarded so the scenario + publish logic stays
+# importable and testable on headless machines / CI without a ROS 2 install.
 try:
-    import rospy
+    import rclpy
+    from rclpy.node import Node
     from geometry_msgs.msg import Twist
     _ROS_AVAILABLE = True
-except ImportError:  # pragma: no cover - allows --dry-run without a ROS install
+except ImportError:  # pragma: no cover - allows --dry-run without ROS 2
     _ROS_AVAILABLE = False
 
-# pynput requires a display backend (X/Quartz/Win32). Import it lazily so that
-# scenario parsing / publishing logic remains importable and testable on
-# headless machines and CI. The listener is only needed for live key capture.
+# pynput requires a display backend (X/Quartz/Win32). Import it lazily too; the
+# listener is only needed for live key capture.
 try:
     from pynput import keyboard
     _PYNPUT_AVAILABLE = True
@@ -80,18 +82,22 @@ class KeyboardController:
         self.scenario_running = False
         self._scenario_thread = None
 
-        # Shutdown flag (used in dry-run where rospy is unavailable).
+        # Shutdown flag (also used in dry-run where rclpy is unavailable).
         self._shutdown_requested = False
 
-        # ROS publisher
+        # ROS node / publisher
+        self.node = None
         self.pub = None
         self.listener = None
 
         if not self.dry_run:
-            rospy.init_node(NODE_NAME, anonymous=False)
-            self.pub = rospy.Publisher(TOPIC_NAME, Twist, queue_size=10)
-            rospy.loginfo("keyboard_controller node started, publishing to %s",
-                          TOPIC_NAME)
+            if not rclpy.ok():
+                rclpy.init()
+            self.node = Node(NODE_NAME)
+            self.pub = self.node.create_publisher(Twist, TOPIC_NAME, 10)
+            self.node.get_logger().info(
+                "keyboard_controller node started, publishing to %s"
+                % TOPIC_NAME)
         else:
             print("⚠️  Running in dry-run mode (no ROS publisher).")
 
@@ -311,7 +317,7 @@ class KeyboardController:
     def _stopping(self):
         if self._shutdown_requested:
             return True
-        return (not self.dry_run) and rospy.is_shutdown()
+        return (not self.dry_run) and (not rclpy.ok())
 
     # ------------------------------------------------------------------ #
     # Publish loop
@@ -336,10 +342,11 @@ class KeyboardController:
             while not self._shutdown_requested:
                 time.sleep(period)
             return
-        rate = rospy.Rate(PUBLISH_RATE_HZ)
-        while not rospy.is_shutdown():
+        while rclpy.ok() and not self._shutdown_requested:
             self.pub.publish(self._make_twist())
-            rate.sleep()
+            # No subscriptions, but spin briefly to service node internals.
+            rclpy.spin_once(self.node, timeout_sec=0.0)
+            time.sleep(period)
         # Send a final zero command so the robot stops instead of coasting on
         # the last velocity after the node shuts down.
         with self._state_lock:
@@ -361,7 +368,13 @@ class KeyboardController:
         if self.listener is not None:
             self.listener.stop()
         if not self.dry_run:
-            rospy.signal_shutdown("user requested shutdown")
+            try:
+                if self.node is not None:
+                    self.node.destroy_node()
+                if rclpy.ok():
+                    rclpy.shutdown()
+            except Exception:
+                pass
 
     def run(self):
         print("=" * 60)
@@ -402,7 +415,7 @@ class KeyboardController:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Keyboard -> ROS Twist controller")
+        description="Keyboard -> ROS 2 Twist controller")
     parser.add_argument("--scenario", metavar="FILE",
                         help="Path to a JSON scenario file to replay.")
     parser.add_argument("--auto", action="store_true",
@@ -411,13 +424,16 @@ def parse_args(argv=None):
                         help="Do not ignore manual keys while a scenario runs.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run without ROS (for local testing).")
-    # rospy injects ROS-style args (e.g. __name:=, __log:=) that contain ":=";
-    # tolerate those but warn about any other unknown args so typos like
-    # "--scenrio" are not silently ignored.
+    # Strip ROS 2 args (--ros-args ...) before argparse when rclpy is present,
+    # then warn about any other unknown args so typos are not silently dropped.
+    if argv is None:
+        argv = sys.argv[1:]
+    if _ROS_AVAILABLE:
+        from rclpy.utilities import remove_ros_args
+        argv = remove_ros_args(args=["prog"] + list(argv))[1:]
     args, unknown = parser.parse_known_args(argv)
-    stray = [a for a in unknown if ":=" not in a]
-    if stray:
-        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(stray))
+    if unknown:
+        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(unknown))
     return args
 
 

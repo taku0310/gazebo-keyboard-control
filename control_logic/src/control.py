@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Control Logic node.
+"""Control Logic node (ROS 2 / rclpy).
 
 Subscribes to ``/cmd_vel`` (raw user commands), applies safety constraints
 and smoothing, then republishes the result to ``/gazebo/cmd_vel`` for the
@@ -21,11 +21,12 @@ import sys
 import time
 
 try:
-    import rospy
+    import rclpy
+    from rclpy.node import Node
     from geometry_msgs.msg import Twist
     from std_msgs.msg import Bool
     _ROS_AVAILABLE = True
-except ImportError:  # pragma: no cover - allows --dry-run without a ROS install
+except ImportError:  # pragma: no cover - allows --dry-run without ROS 2
     _ROS_AVAILABLE = False
 
 
@@ -112,25 +113,28 @@ class ControlLogic:
         self._log_interval = 1.0
         self._last_log = {}
 
+        self.node = None
         self.pub = None
         self.sub = None
         self.estop_sub = None
         self.contact_sub = None
 
         if not self.dry_run:
-            rospy.init_node(NODE_NAME, anonymous=False)
-            self.pub = rospy.Publisher(OUTPUT_TOPIC, Twist, queue_size=10)
-            self.sub = rospy.Subscriber(INPUT_TOPIC, Twist,
-                                        self.cmd_vel_callback, queue_size=10)
-            self.estop_sub = rospy.Subscriber(ESTOP_TOPIC, Bool,
-                                              self.estop_callback, queue_size=1)
+            if not rclpy.ok():
+                rclpy.init()
+            self.node = Node(NODE_NAME)
+            self.pub = self.node.create_publisher(Twist, OUTPUT_TOPIC, 10)
+            self.sub = self.node.create_subscription(
+                Twist, INPUT_TOPIC, self.cmd_vel_callback, 10)
+            self.estop_sub = self.node.create_subscription(
+                Bool, ESTOP_TOPIC, self.estop_callback, 1)
             if self.enable_contact_stop:
-                self.contact_sub = rospy.Subscriber(
-                    CONTACT_TOPIC, Bool, self.contact_callback, queue_size=1)
-            rospy.loginfo("control_logic started: %s -> %s @ %.0f Hz "
-                          "(contact_stop=%s)",
-                          INPUT_TOPIC, OUTPUT_TOPIC, control_rate_hz,
-                          self.enable_contact_stop)
+                self.contact_sub = self.node.create_subscription(
+                    Bool, CONTACT_TOPIC, self.contact_callback, 1)
+            self.node.get_logger().info(
+                "control_logic started: %s -> %s @ %.0f Hz (contact_stop=%s)"
+                % (INPUT_TOPIC, OUTPUT_TOPIC, control_rate_hz,
+                   self.enable_contact_stop))
         else:
             print("⚠️  control_logic running in dry-run mode (no ROS).")
 
@@ -253,25 +257,38 @@ class ControlLogic:
         self.filt_angular = 0.0
         self._publish(0.0, 0.0)
 
+    def _control_cycle(self):
+        """One control cycle: run the pipeline and publish (timer callback)."""
+        linear, angular = self.process(self.target_linear, self.target_angular)
+        self._publish(linear, angular)
+        if self.last_proc_ms > 10.0:
+            self._log_throttled(
+                "latency",
+                "⚠️  control_logic processing %.2f ms > 10 ms budget"
+                % self.last_proc_ms)
+
     def spin(self):
         if self.dry_run:
             print("⚠️  dry-run: control loop not started "
                   "(use process() directly for testing).")
             return
-        # Halt the robot on shutdown so it does not keep moving with the last
-        # commanded velocity after the node dies (Ctrl+C / signal_shutdown).
-        rospy.on_shutdown(self._publish_stop)
-        rate = rospy.Rate(self.control_rate_hz)
-        while not rospy.is_shutdown():
-            linear, angular = self.process(self.target_linear,
-                                           self.target_angular)
-            self._publish(linear, angular)
-            if self.last_proc_ms > 10.0:
-                self._log_throttled(
-                    "latency",
-                    "⚠️  control_logic processing %.2f ms > 10 ms budget"
-                    % self.last_proc_ms)
-            rate.sleep()
+        # A timer drives the fixed-rate control cycle; rclpy.spin services both
+        # the timer and the /cmd_vel, /emergency_stop, /contact subscriptions.
+        self.node.create_timer(self.dt, self._control_cycle)
+        try:
+            rclpy.spin(self.node)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # Halt the robot so it does not keep moving with the last command
+            # after the node shuts down.
+            try:
+                self._publish_stop()
+            except Exception:
+                pass
+            self.node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 def parse_args(argv=None):
@@ -289,12 +306,16 @@ def parse_args(argv=None):
                         help="Disable the optional contact-triggered stop.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run without ROS (for local testing).")
-    # Tolerate ROS-injected args (e.g. __name:=, __log:=) which contain ":=",
-    # but warn about other unknown args so typos are not silently ignored.
+    # Strip ROS 2 args (--ros-args ...) before argparse when rclpy is present,
+    # then warn about any other unknown args so typos are not silently dropped.
+    if argv is None:
+        argv = sys.argv[1:]
+    if _ROS_AVAILABLE:
+        from rclpy.utilities import remove_ros_args
+        argv = remove_ros_args(args=["prog"] + list(argv))[1:]
     args, unknown = parser.parse_known_args(argv)
-    stray = [a for a in unknown if ":=" not in a]
-    if stray:
-        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(stray))
+    if unknown:
+        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(unknown))
     return args
 
 
