@@ -137,5 +137,28 @@ class TestLatency(unittest.TestCase):
         self.assertLess(worst, 10.0, "processing exceeded 10 ms budget")
 
 
+class TestNonFiniteInput(unittest.TestCase):
+    """A NaN/Inf target must not poison the exponential filter (defense in
+    depth; ros_bridge already rejects these upstream)."""
+
+    def test_nan_is_sanitized_and_recovers(self):
+        import math
+        node = make_node()
+        node.process(float("nan"), float("inf"))
+        out = (0.0, 0.0)
+        for _ in range(100):
+            out = node.process(1.0, 0.0)
+        self.assertTrue(math.isfinite(out[0]) and math.isfinite(out[1]))
+        self.assertTrue(math.isfinite(node.filt_linear))
+        self.assertGreater(out[0], 0.0)  # converged toward the real target
+
+    def test_single_nan_yields_finite_output(self):
+        import math
+        node = make_node()
+        out = node.process(float("nan"), float("nan"))
+        self.assertEqual(out, (0.0, 0.0))
+        self.assertTrue(math.isfinite(node.filt_linear))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

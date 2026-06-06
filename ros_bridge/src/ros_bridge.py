@@ -28,6 +28,8 @@ so the robot halts when a client disconnects or stalls.
 
 import argparse
 import json
+import math
+import os
 import socket
 import sys
 import threading
@@ -51,15 +53,24 @@ DEFAULT_PORT = 9090
 DEFAULT_RATE_HZ = 20.0
 DEFAULT_WATCHDOG_S = 0.5
 RECV_BUFSIZE = 4096
+# Hardening limits. A single wire line must be small; reject anything that
+# grows the per-connection buffer past this without a newline (defends against
+# an unbounded-stream memory-exhaustion DoS). Cap concurrent clients so a flood
+# of connections cannot exhaust threads/memory.
+MAX_LINE_BYTES = int(os.environ.get("BRIDGE_MAX_LINE_BYTES", "65536"))
+MAX_CLIENTS = int(os.environ.get("BRIDGE_MAX_CLIENTS", "8"))
 
 
 def parse_command(line):
     """Parse one wire line into ``(linear_x, angular_z)`` or ``None``.
 
     Pure function (no I/O, no ROS) so it can be unit-tested headlessly. Returns
-    ``None`` for blank lines, malformed JSON, non-objects, or non-numeric
-    fields. Accepts both the flat (``linear_x``/``angular_z``) and the nested
-    Twist-like (``linear.x``/``angular.z``) forms.
+    ``None`` for blank lines, malformed JSON, non-objects, non-numeric fields,
+    or **non-finite values (NaN / Infinity)** - the JSON spec extensions that
+    Python's ``json`` accepts by default but which would otherwise poison the
+    downstream filter permanently. Accepts both the flat
+    (``linear_x``/``angular_z``) and the nested (``linear.x``/``angular.z``)
+    forms.
     """
     if isinstance(line, bytes):
         line = line.decode("utf-8", "replace")
@@ -76,21 +87,27 @@ def parse_command(line):
     # Flat form: {"linear_x": .., "angular_z": ..}
     if "linear_x" in data or "angular_z" in data:
         try:
-            return (float(data.get("linear_x", 0.0)),
-                    float(data.get("angular_z", 0.0)))
+            lx = float(data.get("linear_x", 0.0))
+            az = float(data.get("angular_z", 0.0))
+        except (TypeError, ValueError):
+            return None
+    else:
+        # Nested form: {"linear": {"x": ..}, "angular": {"z": ..}}
+        lin = data.get("linear")
+        ang = data.get("angular")
+        if not (isinstance(lin, dict) or isinstance(ang, dict)):
+            return None
+        try:
+            lx = float((lin or {}).get("x", 0.0))
+            az = float((ang or {}).get("z", 0.0))
         except (TypeError, ValueError):
             return None
 
-    # Nested form: {"linear": {"x": ..}, "angular": {"z": ..}}
-    lin = data.get("linear")
-    ang = data.get("angular")
-    if isinstance(lin, dict) or isinstance(ang, dict):
-        try:
-            return (float((lin or {}).get("x", 0.0)),
-                    float((ang or {}).get("z", 0.0)))
-        except (TypeError, ValueError):
-            return None
-    return None
+    # Reject NaN / +-Infinity: a single such command would lock the control
+    # filter at NaN forever (clip/rate_limit comparisons are False for NaN).
+    if not (math.isfinite(lx) and math.isfinite(az)):
+        return None
+    return (lx, az)
 
 
 class RosBridge:
@@ -111,6 +128,8 @@ class RosBridge:
 
         self._shutdown = False
         self._server = None
+        # Limits concurrent client connections (DoS hardening).
+        self._client_slots = threading.BoundedSemaphore(MAX_CLIENTS)
 
         self.node = None
         self.pub = None
@@ -163,14 +182,26 @@ class RosBridge:
                 # Process complete, newline-terminated lines.
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    cmd = parse_command(line)
+                    try:
+                        cmd = parse_command(line)
+                    except Exception:
+                        # Defensive: never let a malformed line (e.g. deeply
+                        # nested JSON -> RecursionError) kill the connection.
+                        cmd = None
                     if cmd is not None:
                         self._set_target(cmd[0], cmd[1])
+                # Bound the buffer: a client that never sends a newline must not
+                # be able to grow it without limit (memory-exhaustion DoS).
+                if len(buf) > MAX_LINE_BYTES:
+                    print("⚠️  client %s:%d exceeded line limit (%d B); "
+                          "dropping" % (addr[0], addr[1], MAX_LINE_BYTES))
+                    break
         finally:
             try:
                 conn.close()
             except OSError:
                 pass
+            self._client_slots.release()
             print("🔌 client disconnected: %s:%d" % addr)
 
     def _accept_loop(self):
@@ -181,6 +212,16 @@ class RosBridge:
                 continue
             except OSError:
                 break
+            # Cap concurrent clients: a connection flood must not exhaust
+            # threads/memory. Refuse (and close) once at the limit.
+            if not self._client_slots.acquire(blocking=False):
+                print("⚠️  max clients (%d) reached; refusing %s:%d"
+                      % (MAX_CLIENTS, addr[0], addr[1]))
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                continue
             threading.Thread(target=self._handle_client,
                              args=(conn, addr), daemon=True).start()
 

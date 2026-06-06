@@ -66,6 +66,21 @@ class Invalid(unittest.TestCase):
         self.assertIsNone(rb.parse_command('{"foo": 1}'))
 
 
+class NonFinite(unittest.TestCase):
+    """NaN / Infinity must be rejected: they would lock the control filter."""
+
+    def test_nan_rejected(self):
+        self.assertIsNone(rb.parse_command('{"linear_x": NaN}'))
+        self.assertIsNone(rb.parse_command('{"linear_x": 1.0, "angular_z": NaN}'))
+
+    def test_infinity_rejected(self):
+        self.assertIsNone(rb.parse_command('{"linear_x": Infinity}'))
+        self.assertIsNone(rb.parse_command('{"linear_x": -Infinity}'))
+
+    def test_nested_non_finite_rejected(self):
+        self.assertIsNone(rb.parse_command('{"linear": {"x": Infinity}}'))
+
+
 class Watchdog(unittest.TestCase):
     def test_zero_when_stale(self):
         bridge = rb.RosBridge(dry_run=True)

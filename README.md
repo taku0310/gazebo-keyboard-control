@@ -266,6 +266,27 @@ DiffDrive プラグイン・IMU センサとともに定義されています。
 Python ノード・シナリオ・安全パイプラインはヘッドレスで検証済みです。フルの
 Docker/Gazebo ビルドとランタイムは、実際の Docker ホストでの検証が必要です。
 
+## セキュリティ
+
+本リポジトリは**ローカル単一ホストのデモ**を前提にした既定値です。ネットワークに
+公開する場合は以下に注意してください。
+
+- **公開ポートは既定で localhost のみ**にバインドします（`127.0.0.1:9090`・
+  `127.0.0.1:8080`）。外部公開は明示オプトイン（`.env.example` 参照）:
+  - `BRIDGE_BIND=0.0.0.0` … ros_bridge を外部公開（SoftPLC 接続用）
+  - `WEBUI_BIND=0.0.0.0` … Gazebo Web UI を外部公開
+- **`ros_bridge`(:9090) は無認証**です。到達できれば誰でも速度指令を注入できます。
+  外部公開時は**ファイアウォール / VPN / 専用 NW** で必ず保護してください。
+- **Gazebo Web UI(:8080) も既定で無認証**です。`VNC_PASSWORD` を設定すると
+  noVNC/VNC にパスワードを要求します（外部公開時は必須推奨）。
+- **入力検証**: `ros_bridge` は不正 JSON・**NaN/Infinity**（フィルタを破壊しうる）・
+  過大な行（メモリ枯渇 DoS）・過剰な同時接続を拒否します。`control_logic` も
+  非有限値を 0 に正規化し、速度・加速度を上限にクリップします（多層防御）。
+- **最小権限**: `ros_bridge` / `keyboard_controller` / `control_logic` は
+  **非 root** で実行します（`gazebo` は X/VNC の都合で root）。
+- **DDS は既定で無認証**です。共有ネットワークで使う場合は `ROS_DOMAIN_ID` で分離し、
+  本格運用では SROS2（DDS Security）を検討してください。
+
 ## トラブルシューティング
 
 システムが動作しない場合は [TROUBLESHOOT.md](TROUBLESHOOT.md) を参照してください。

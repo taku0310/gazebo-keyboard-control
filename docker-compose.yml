@@ -17,7 +17,11 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
       - BRIDGE_PORT=9090
     ports:
-      - "9090:9090"
+      # Bound to localhost by default - the bridge accepts UNAUTHENTICATED
+      # commands, so do not expose it on all interfaces unless you mean to.
+      # For an external SoftPLC set BRIDGE_BIND=0.0.0.0 (and protect 9090 with
+      # a firewall / VPN / dedicated network). See .env.example.
+      - "${BRIDGE_BIND:-127.0.0.1}:9090:9090"
     networks:
       - ros_net
 
@@ -37,7 +41,8 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - ./scenarios:/app/scenarios
+      # Read-only: the controller only reads scenarios, never writes them.
+      - ./scenarios:/app/scenarios:ro
 
   # ---------------------------------------------------------------- #
   # Control Logic - /cmd_vel -> safety constraints -> /gazebo/cmd_vel.
@@ -59,8 +64,13 @@ services:
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
       - WORLD_FILE=/root/.gazebo/worlds/empty.world
+      # If set, the noVNC/VNC session requires this password. Empty = no auth
+      # (acceptable only because the port is localhost-only by default).
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
     ports:
-      - "8080:8080"
+      # Localhost by default - this is an unauthenticated remote desktop unless
+      # VNC_PASSWORD is set. For remote viewing set WEBUI_BIND=0.0.0.0.
+      - "${WEBUI_BIND:-127.0.0.1}:8080:8080"
     volumes:
       - ./gazebo_simulator/models:/root/.gazebo/models
       - ./gazebo_simulator/worlds:/root/.gazebo/worlds

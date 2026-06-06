@@ -18,6 +18,11 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src/ /app/src/
 
+# Drop privileges: run as a non-root user (defense in depth).
+RUN useradd -m -u 1000 appuser && chown -R appuser /app
+USER appuser
+ENV HOME=/home/appuser
+
 # The bridge endpoint is provided by docker-compose (BRIDGE_HOST/BRIDGE_PORT).
 # stdin/tty are required for keyboard capture (compose run -it).
 CMD ["python3", "/app/src/keyboard_input_controller.py"]

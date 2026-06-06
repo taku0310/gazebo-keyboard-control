@@ -21,6 +21,11 @@ COPY src/ /app/src/
 
 ENV PYTHONUNBUFFERED=1
 
+# Drop privileges: run as a non-root user (defense in depth).
+RUN useradd -m -u 1000 appuser && chown -R appuser /app
+USER appuser
+ENV HOME=/home/appuser
+
 # ROS 2 is masterless (DDS discovery); ROS_DOMAIN_ID is provided by
 # docker-compose. No tty needed (headless node).
 ENTRYPOINT ["/ros_entrypoint.sh"]
