@@ -8,19 +8,23 @@
 #   logs, the topic graph is just empty).
 #
 #   This overlay adds a small `discovery_server` sidecar (the same Fast DDS
-#   binary already shipped in ros-jazzy) and points every node at it via
+#   binary already shipped in ros-jazzy) and points every ROS node at it via
 #   ROS_DISCOVERY_SERVER. Discovery becomes pure TCP/UDP unicast, which is
 #   exactly what Docker bridges forward reliably.
+#
+#   Note: keyboard_controller is NOT a ROS node (it is a TCP client of
+#   ros_bridge), so it is intentionally absent here - only the ROS nodes
+#   (ros_bridge, control_logic, gazebo) need discovery settings.
 #
 # How to use:
 #   docker compose -f docker-compose.yml -f docker-compose.discovery.yml up -d
 #   # ...or start the discovery-only stack:
 #   docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
-#     up -d discovery_server control_logic gazebo
+#     up -d discovery_server ros_bridge control_logic gazebo
 #
 # Notes:
 #   - Fast DDS Discovery Server listens on UDP 11811 by default.
-#   - All services here use RMW_IMPLEMENTATION=rmw_fastrtps_cpp because the
+#   - All ROS services here use RMW_IMPLEMENTATION=rmw_fastrtps_cpp because the
 #     Discovery Server feature is Fast DDS-specific.
 services:
   discovery_server:
@@ -32,7 +36,7 @@ services:
       - ros_net
     restart: unless-stopped
 
-  keyboard_controller:
+  ros_bridge:
     environment:
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       - ROS_DISCOVERY_SERVER=discovery_server:11811

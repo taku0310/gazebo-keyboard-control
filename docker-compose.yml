@@ -1,18 +1,37 @@
 # Robot simulation stack (ROS 2 Jazzy + Gazebo Sim Harmonic):
-# keyboard -> control logic -> gazebo.
+# input source -> TCP -> ROS Bridge -> DDS -> control logic -> gazebo.
 #
-# ROS 2 is masterless: nodes discover each other over DDS on the shared
-# ros_net bridge as long as they use the same ROS_DOMAIN_ID. There is no
-# roscore/ROS Master container and no startup-ordering requirement.
+# The command source (keyboard today, a SoftPLC later) is decoupled from ROS 2
+# by a TCP boundary: it speaks JSON Lines to the ros_bridge service, which is
+# the single DDS publisher of /cmd_vel. ROS 2 itself is masterless - the ROS
+# nodes (ros_bridge, control_logic, gazebo) discover each other over DDS on the
+# shared ros_net using the same ROS_DOMAIN_ID.
 services:
   # ---------------------------------------------------------------- #
-  # Keyboard Controller - keyboard input -> /cmd_vel (Twist).
-  #   Needs stdin/tty to capture keystrokes.
+  # ROS Bridge - TCP (JSON Lines) server -> /cmd_vel (Twist) on DDS.
+  #   Port 9090 is published so external clients (e.g. a SoftPLC) can connect.
+  # ---------------------------------------------------------------- #
+  ros_bridge:
+    build: ./ros_bridge
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - BRIDGE_PORT=9090
+    ports:
+      - "9090:9090"
+    networks:
+      - ros_net
+
+  # ---------------------------------------------------------------- #
+  # Keyboard Controller - keyboard/scenario -> JSON over TCP -> ros_bridge.
+  #   ROS-free TCP client. Needs stdin/tty to capture keystrokes.
   # ---------------------------------------------------------------- #
   keyboard_controller:
     build: ./keyboard_input
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - BRIDGE_HOST=ros_bridge
+      - BRIDGE_PORT=9090
+    depends_on:
+      - ros_bridge
     networks:
       - ros_net
     stdin_open: true

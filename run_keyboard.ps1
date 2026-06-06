@@ -106,17 +106,17 @@ function Stop-Stack {
 
 try {
     # ----------------------------------------------------------------------- #
-    # Start backing services detached. ROS 2 is masterless (DDS discovery);
-    # there is no roscore container.
+    # Start backing services detached. keyboard_controller is a TCP client of
+    # ros_bridge (the DDS publisher of /cmd_vel). ROS 2 is masterless.
     # ----------------------------------------------------------------------- #
-    Write-Host "🚀 Starting backing services (control_logic, gazebo)..."
-    Invoke-Compose @("up", "-d", "control_logic", "gazebo")
+    Write-Host "🚀 Starting backing services (ros_bridge, control_logic, gazebo)..."
+    Invoke-Compose @("up", "-d", "ros_bridge", "control_logic", "gazebo")
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to start services."
     }
 
     # Give the services a moment to come up and discover over DDS.
-    Write-Host "⏳ Waiting for services (ROS 2 DDS discovery)..."
+    Write-Host "⏳ Waiting for services (ROS 2 DDS discovery + bridge TCP)..."
     Start-Sleep -Seconds 3
     Write-Host "✅ Services should be up."
 

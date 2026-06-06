@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Keyboard Controller node (ROS 2 / rclpy).
+"""Keyboard Controller (TCP client for the ROS Bridge).
 
-Reads keyboard input via pynput (cross-platform: macOS / Windows / Linux),
-converts it into geometry_msgs/msg/Twist messages and publishes them to the
-``/cmd_vel`` topic at a fixed rate (20 Hz).
+Reads keyboard input (stdin or pynput) or replays a recorded JSON scenario,
+and sends velocity commands as newline-delimited JSON over TCP to the
+``ros_bridge`` service, which republishes them as ``geometry_msgs/msg/Twist``
+on ``/cmd_vel`` (DDS). The controller itself never touches ROS - it is a plain
+TCP client, exactly like the future SoftPLC will be.
 
-Also supports replaying a recorded scenario from a JSON file so that demos
-are 100% reproducible.
+Wire protocol (one JSON object per line, sent at 20 Hz)::
+
+    {"linear_x": 1.0, "angular_z": 0.5}
 
 Key bindings
 ------------
@@ -25,19 +28,10 @@ Q / ESC     : quit
 import argparse
 import json
 import os
+import socket
 import sys
 import threading
 import time
-
-# rclpy is imported lazily/guarded so the scenario + publish logic stays
-# importable and testable on headless machines / CI without a ROS 2 install.
-try:
-    import rclpy
-    from rclpy.node import Node
-    from geometry_msgs.msg import Twist
-    _ROS_AVAILABLE = True
-except ImportError:  # pragma: no cover - allows --dry-run without ROS 2
-    _ROS_AVAILABLE = False
 
 # pynput requires a display backend (X/Quartz/Win32). Import it lazily too; the
 # listener is only needed for live key capture in the pynput mode.
@@ -71,11 +65,14 @@ except ImportError:
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
-NODE_NAME = "keyboard_controller"
-TOPIC_NAME = "/cmd_vel"
 PUBLISH_RATE_HZ = 20.0
 DEFAULT_MAX_SPEED = 2.0
 SPEED_SCALE_FACTOR = 1.1
+
+# TCP connection to the ros_bridge service. Overridable via env / CLI so the
+# same image works in compose (host "ros_bridge") and locally ("localhost").
+DEFAULT_BRIDGE_HOST = os.environ.get("BRIDGE_HOST", "localhost")
+DEFAULT_BRIDGE_PORT = int(os.environ.get("BRIDGE_PORT", "9090"))
 
 # stdin mode: how long after the last keypress the movement direction is
 # considered "released". Without OS-level key-up events, releases are inferred
@@ -85,18 +82,26 @@ STDIN_KEY_HOLD_SECONDS = 0.25
 
 
 class KeyboardController:
-    """Translate keyboard events into Twist messages and publish them."""
+    """Translate keyboard events into JSON commands and send them over TCP."""
 
     def __init__(self, scenario_path=None, auto=False,
                  ignore_keys_during_scenario=True, dry_run=False,
-                 input_mode="auto"):
+                 input_mode="auto", bridge_host=DEFAULT_BRIDGE_HOST,
+                 bridge_port=DEFAULT_BRIDGE_PORT):
         self.scenario_path = scenario_path
         self.auto = auto
         self.ignore_keys_during_scenario = ignore_keys_during_scenario
-        self.dry_run = dry_run or not _ROS_AVAILABLE
+        # dry_run skips the TCP connection (for local/headless testing).
+        self.dry_run = dry_run
         # "auto" -> stdin if a tty is attached (containers / SSH), else pynput
         # if available (native desktop with a display), else no live input.
         self.input_mode = input_mode
+
+        # ros_bridge TCP endpoint.
+        self.bridge_host = bridge_host
+        self.bridge_port = bridge_port
+        self._sock = None
+        self._conn_warned = False
 
         # Velocity state
         self.max_speed = DEFAULT_MAX_SPEED
@@ -114,27 +119,20 @@ class KeyboardController:
         self.scenario_running = False
         self._scenario_thread = None
 
-        # Shutdown flag (also used in dry-run where rclpy is unavailable).
+        # Shutdown flag (also used to stop background threads in dry-run).
         self._shutdown_requested = False
 
-        # ROS node / publisher / input
-        self.node = None
-        self.pub = None
+        # Input backends.
         self.listener = None
         self._stdin_thread = None
         self._stdin_release_thread = None
         self._termios_saved = None
 
-        if not self.dry_run:
-            if not rclpy.ok():
-                rclpy.init()
-            self.node = Node(NODE_NAME)
-            self.pub = self.node.create_publisher(Twist, TOPIC_NAME, 10)
-            self.node.get_logger().info(
-                "keyboard_controller node started, publishing to %s"
-                % TOPIC_NAME)
+        if self.dry_run:
+            print("⚠️  Running in dry-run mode (no TCP connection to bridge).")
         else:
-            print("⚠️  Running in dry-run mode (no ROS publisher).")
+            print("🔗 ros_bridge target: %s:%d (sending JSON @ %d Hz)"
+                  % (self.bridge_host, self.bridge_port, int(PUBLISH_RATE_HZ)))
 
     # ------------------------------------------------------------------ #
     # Velocity helpers
@@ -504,26 +502,42 @@ class KeyboardController:
                 self._shutdown()
 
     def _stopping(self):
-        if self._shutdown_requested:
-            return True
-        return (not self.dry_run) and (not rclpy.ok())
+        return self._shutdown_requested
 
     # ------------------------------------------------------------------ #
-    # Publish loop
+    # TCP send loop
     # ------------------------------------------------------------------ #
-    def _make_twist(self):
-        twist = Twist()
+    def _make_command(self):
+        """Serialize the current velocity as one JSON Lines wire message."""
         with self._state_lock:
-            twist.linear.x = self.linear_x
-            twist.linear.y = 0.0
-            twist.linear.z = 0.0
-            twist.angular.x = 0.0
-            twist.angular.y = 0.0
-            twist.angular.z = self.angular_z
-        return twist
+            payload = {"linear_x": self.linear_x, "angular_z": self.angular_z}
+        return (json.dumps(payload) + "\n").encode("utf-8")
+
+    def _connect(self):
+        """Try once to (re)connect to the bridge. Sets self._sock or None."""
+        try:
+            self._sock = socket.create_connection(
+                (self.bridge_host, self.bridge_port), timeout=3.0)
+            print("🔌 connected to ros_bridge %s:%d"
+                  % (self.bridge_host, self.bridge_port))
+            self._conn_warned = False
+        except OSError as exc:
+            self._sock = None
+            if not self._conn_warned:
+                print("⏳ waiting for ros_bridge %s:%d (%s)..."
+                      % (self.bridge_host, self.bridge_port, exc))
+                self._conn_warned = True
+
+    def _close_sock(self):
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
 
     def publish_loop(self):
-        """Publish Twist messages at PUBLISH_RATE_HZ until shutdown."""
+        """Send JSON commands to the bridge at PUBLISH_RATE_HZ until shutdown."""
         period = 1.0 / PUBLISH_RATE_HZ
         if self.dry_run:
             # Faithfully idle at the publish rate so scenario threads run to
@@ -531,20 +545,30 @@ class KeyboardController:
             while not self._shutdown_requested:
                 time.sleep(period)
             return
-        while rclpy.ok() and not self._shutdown_requested:
-            self.pub.publish(self._make_twist())
-            # No subscriptions, but spin briefly to service node internals.
-            rclpy.spin_once(self.node, timeout_sec=0.0)
+        while not self._shutdown_requested:
+            if self._sock is None:
+                self._connect()
+                if self._sock is None:
+                    time.sleep(0.5)
+                    continue
+            try:
+                self._sock.sendall(self._make_command())
+            except OSError:
+                print("⚠️  ros_bridge connection lost; reconnecting...")
+                self._close_sock()
+                continue
             time.sleep(period)
         # Send a final zero command so the robot stops instead of coasting on
-        # the last velocity after the node shuts down.
+        # the last velocity after the controller shuts down.
         with self._state_lock:
             self.linear_x = 0.0
             self.angular_z = 0.0
-        try:
-            self.pub.publish(self._make_twist())
-        except Exception:
-            pass
+        if self._sock is not None:
+            try:
+                self._sock.sendall(self._make_command())
+            except OSError:
+                pass
+        self._close_sock()
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -556,19 +580,12 @@ class KeyboardController:
         print("👋 Shutting down keyboard_controller.")
         if self.listener is not None:
             self.listener.stop()
-        if not self.dry_run:
-            try:
-                if self.node is not None:
-                    self.node.destroy_node()
-                if rclpy.ok():
-                    rclpy.shutdown()
-            except Exception:
-                pass
+        # The publish_loop sends a final zero and closes the socket on exit.
 
     def run(self):
         print("=" * 60)
-        print(" keyboard_controller  (publishing to %s @ %d Hz)"
-              % (TOPIC_NAME, int(PUBLISH_RATE_HZ)))
+        print(" keyboard_controller  (-> ros_bridge %s:%d @ %d Hz)"
+              % (self.bridge_host, self.bridge_port, int(PUBLISH_RATE_HZ)))
         print("=" * 60)
         print(" W/↑ forward  S/↓ back  A/← left  D/→ right")
         print(" +/- speed scale   R reset   SPACE scenario   Q/ESC quit")
@@ -642,7 +659,7 @@ class KeyboardController:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Keyboard -> ROS 2 Twist controller")
+        description="Keyboard -> TCP (JSON) -> ros_bridge controller")
     parser.add_argument("--scenario", metavar="FILE",
                         help="Path to a JSON scenario file to replay.")
     parser.add_argument("--auto", action="store_true",
@@ -653,15 +670,14 @@ def parse_args(argv=None):
                         default="auto",
                         help="Live input backend (default: auto - stdin if a "
                              "TTY is attached, else pynput if available).")
+    parser.add_argument("--bridge-host", default=DEFAULT_BRIDGE_HOST,
+                        help="ros_bridge TCP host (env BRIDGE_HOST, "
+                             "default: %s)." % DEFAULT_BRIDGE_HOST)
+    parser.add_argument("--bridge-port", type=int, default=DEFAULT_BRIDGE_PORT,
+                        help="ros_bridge TCP port (env BRIDGE_PORT, "
+                             "default: %d)." % DEFAULT_BRIDGE_PORT)
     parser.add_argument("--dry-run", action="store_true",
-                        help="Run without ROS (for local testing).")
-    # Strip ROS 2 args (--ros-args ...) before argparse when rclpy is present,
-    # then warn about any other unknown args so typos are not silently dropped.
-    if argv is None:
-        argv = sys.argv[1:]
-    if _ROS_AVAILABLE:
-        from rclpy.utilities import remove_ros_args
-        argv = remove_ros_args(args=["prog"] + list(argv))[1:]
+                        help="Run without connecting to the bridge (testing).")
     args, unknown = parser.parse_known_args(argv)
     if unknown:
         print("⚠️  Ignoring unknown argument(s): %s" % " ".join(unknown))
@@ -675,6 +691,8 @@ def main(argv=None):
         auto=args.auto,
         ignore_keys_during_scenario=not args.allow_keys_during_scenario,
         input_mode=args.input,
+        bridge_host=args.bridge_host,
+        bridge_port=args.bridge_port,
         dry_run=args.dry_run,
     )
     controller.run()
