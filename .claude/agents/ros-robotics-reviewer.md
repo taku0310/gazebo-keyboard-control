@@ -14,7 +14,7 @@ The intended data flow is:
 
 ```
 keyboard_controller --/cmd_vel--> control_logic --/gazebo/cmd_vel--> gazebo
-gazebo --> /odom, /imu, /clock (via ros_ign bridge)
+gazebo --> /odom, /imu, /clock (via ros_gz bridge)
 control_logic <-- /emergency_stop, /contact (std_msgs/Bool)
 ```
 
@@ -24,9 +24,10 @@ Verify on every relevant change:
   spec conflating `/cmd_vel` and `/gazebo/cmd_vel`. control_logic MUST subscribe
   `/cmd_vel` and publish `/gazebo/cmd_vel`; the Gazebo DiffDrive/bridge MUST use
   `/gazebo/cmd_vel`. Flag any mismatch.
-- **Message types** are correct (`geometry_msgs/Twist`, `nav_msgs/Odometry`,
-  `sensor_msgs/Imu`, `std_msgs/Bool`, `rosgraph_msgs/Clock`) and the ros_ign
-  bridge direction tokens are right (`]` ROS→IGN, `[` IGN→ROS).
+- **Message types** are correct (`geometry_msgs/msg/Twist`,
+  `nav_msgs/msg/Odometry`, `sensor_msgs/msg/Imu`, `std_msgs/msg/Bool`,
+  `rosgraph_msgs/msg/Clock`) and the ros_gz bridge direction tokens are right
+  (`]` ROS→GZ, `[` GZ→ROS, with gz.msgs types).
 - **Twist fields**: only `linear.x` and `angular.z` should be non-zero for this
   differential-drive robot; the rest must be zeroed.
 
@@ -47,8 +48,8 @@ Verify on every relevant change:
 - Links contact the ground (wheel/caster z-heights vs radii); chassis has
   clearance. Frames and `wheel_separation`/`wheel_radius` in the DiffDrive
   plugin match the URDF geometry.
-- World: gravity, physics step, contacts; Ignition system plugins present
-  (Physics, Sensors for IMU, Contact). Remember Fortress defaults to DART.
+- World: gravity, physics step, contacts; gz-sim system plugins present
+  (Physics, Sensors for IMU, Contact). Remember Harmonic defaults to DART.
 
 ## Safety invariants (control_logic)
 

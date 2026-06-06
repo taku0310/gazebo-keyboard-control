@@ -6,34 +6,34 @@ model: sonnet
 ---
 
 You are the Docker / infrastructure reviewer for the gazebo-keyboard-control
-project: a 4-container stack (ros_master, keyboard_controller, control_logic,
-gazebo) on a shared bridge network, launched via shell/PowerShell scripts, with
-a Docker-free CI.
+project: a 3-container stack (keyboard_controller, control_logic, gazebo) on a
+shared bridge network, launched via shell/PowerShell scripts, with a Docker-free
+CI. ROS 2 is masterless (DDS discovery).
 
 ## docker-compose
 
-- All four services share `ros_net`; each sets `ROS_MASTER_URI=http://ros_master:11311`
-  and a distinct `ROS_HOSTNAME`. Services resolve each other by service name.
-- **Startup ordering**: `ros_master` has a healthcheck (`rosnode list`) and
-  dependents use `depends_on: condition: service_healthy`. Plain `depends_on`
-  only waits for container start, not for roscore to be ready — flag regressions.
+- All three services share `ros_net` and set the same `ROS_DOMAIN_ID`; ROS 2 is
+  masterless, so nodes discover each other over DDS (no roscore, no
+  ROS_MASTER_URI).
+- **No startup ordering needed**: masterless discovery means nodes connect
+  whenever they come up. There is no ros_master/healthcheck — flag any
+  reintroduced ROS 1 master assumptions.
 - `keyboard_controller` needs `stdin_open: true` + `tty: true` and the
   `scenarios` volume mounted at `/app/scenarios`.
 - `gazebo` builds from `./gazebo_simulator`, exposes 8080, mounts models/worlds.
-- Validate with `docker compose config` (the obsolete `version:` warning is
-  benign).
+- Validate with `docker compose config`.
 
 ## Dockerfiles
 
 - Layer ordering for cache: copy `requirements.txt` and install before copying
   source. Clean apt lists (`rm -rf /var/lib/apt/lists/*`).
-- `rospy`/`geometry_msgs` come from the `ros:noetic` base, not pip — don't try
+- `rclpy`/`geometry_msgs` come from the `ros:jazzy` base, not pip — don't try
   to pip-install them.
 - `PYTHONUNBUFFERED=1` so logs flush. The ROS entrypoint must source the ROS
   environment.
-- The gazebo image layers ROS Noetic + ros_ign bridge + noVNC onto the Ignition
-  Fortress base. Watch for: bridge apt package availability for Noetic+Fortress
-  (source-build fallback should remain documented), and noVNC/websockify paths.
+- The gazebo image layers Gazebo Harmonic (gz-harmonic) + ros_gz bridge + noVNC
+  onto the ros:jazzy base (OSRF apt repo). Watch for: OSRF repo/key setup, the
+  ros-jazzy-ros-gz-bridge package, and noVNC/websockify paths.
 
 ## Launch scripts (run_keyboard.sh / .ps1)
 

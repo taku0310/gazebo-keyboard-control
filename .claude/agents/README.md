@@ -2,7 +2,7 @@
 
 Project-specific [Claude Code subagents](https://docs.claude.com/en/docs/claude-code/sub-agents)
 for gazebo-keyboard-control. They carry this project's hard-won context (topic
-graph, REP-103 conventions, the ROS Noetic ↔ Ignition Fortress caveats, the
+graph, REP-103 conventions, the ROS 2 Jazzy ↔ Gazebo Harmonic caveats, the
 latency budget, cross-platform launch quirks) so reviews are consistent and
 fast.
 
@@ -41,10 +41,10 @@ reviewers are **read-only**; the test engineer may write tests.
 - REP-103: +linear.x forward, +angular.z = left (CCW); only x/z non-zero.
 - Safety: output always within limits; bounded acceleration; e-stop/contact →
   smooth stop; control_logic < 10 ms/cycle.
-- Headless testability: guarded `pynput`/`rospy` imports, `--dry-run`, no
+- Headless testability: guarded `pynput`/`rclpy` imports, `--dry-run`, no
   display/ROS needed for unit tests and CI.
-- Startup ordering via the `ros_master` healthcheck; launch scripts use
-  `compose run` (not `exec`).
+- Masterless DDS discovery (same `ROS_DOMAIN_ID`, no roscore); launch scripts
+  use `compose run` (not `exec`).
 
 ## Adding or editing agents
 

@@ -17,7 +17,7 @@
 │
 ├─ 起動したがロボットが動かない
 │   │
-│   ├─ rostopic でトピックが見えない ───────────▶ 2. ROS 通信エラー
+│   ├─ ros2 topic でトピックが見えない ──────────▶ 2. ROS 通信エラー
 │   ├─ localhost:8080 が開けない ───────────────▶ 3. Gazebo エラー
 │   └─ キー入力が効かない ───────────────────────▶ 4. キーボード入力エラー
 │
@@ -29,8 +29,11 @@
 ```bash
 docker compose ps                 # 各コンテナの状態
 docker compose logs --tail 50     # 直近のログ（全サービス）
-docker compose logs ros_master    # 特定サービスのログ
+docker compose logs control_logic # 特定サービスのログ
 ```
+
+> ROS 2 はマスターレスです（roscore コンテナはありません）。各ノードは同じ
+> `ROS_DOMAIN_ID`（本リポジトリでは 42）のもと DDS で相互探索します。
 
 ---
 
@@ -56,18 +59,17 @@ docker-compose version      # v1（旧）
   通常はスクリプト経由での起動で問題ありません。
 - Linux で `docker` が `sudo` 必須の場合は 1-3 を参照。
 
-### 1-2. `Port is already allocated` / `Port 11311 already in use`
+### 1-2. `Port is already allocated` / `Port 8080 already in use`
 
-**原因:** ROS Master の 11311、または Gazebo Web UI の 8080 が、既存の
-roscore・別の compose・他プロセスに使われている。
+**原因:** Gazebo Web UI の 8080 が、別の compose・他プロセスに使われている。
+（ROS 2 はマスターレスのため固定ポート 11311 は使いません。DDS は動的ポートを使用。）
 
 **確認:**
 ```bash
 # ポートを使用しているプロセスを特定
-lsof -i :11311          # macOS / Linux
-lsof -i :8080
+lsof -i :8080           # macOS / Linux
 # あるいは
-sudo ss -ltnp | grep -E '11311|8080'   # Linux
+sudo ss -ltnp | grep 8080   # Linux
 # 残存コンテナの確認
 docker ps -a
 ```
@@ -77,13 +79,13 @@ docker ps -a
 # 1) 本プロジェクトの残存コンテナを片付ける
 docker compose down --remove-orphans
 
-# 2) ホストで roscore が動いていれば停止
-pkill -f roscore
-
-# 3) それでも衝突する場合はホスト側ポートを変更（docker-compose.yml）
-#    例: "11312:11311" / "8081:8080" のように左側（ホスト）を変える
+# 2) それでも衝突する場合はホスト側ポートを変更（docker-compose.yml）
+#    例: "8081:8080" のように左側（ホスト）を変える
 ```
 ホスト側ポートを変えた場合、Web UI は変更後のポート（例 `localhost:8081`）で開きます。
+
+> DDS 探索が同一ホストの別プロジェクトと干渉する場合は、`ROS_DOMAIN_ID` を
+> 変更して分離してください（compose の各サービスの環境変数）。
 
 ### 1-3. `Permission denied`（Docker ソケット / ファイル）
 
@@ -112,22 +114,20 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ### 1-4. ビルドが失敗する（特に `gazebo`）
 
-**原因:** `gazebo` イメージは Ignition Fortress + ROS Noetic + `ros_ign` bridge
-+ noVNC と重く、`ros-noetic-ros-ign-bridge` の apt パッケージが Noetic+Fortress
-の組み合わせで取得できないことがあります（[README の既知の注意点](README.md#既知の注意点)）。
+**原因:** `gazebo` イメージは ROS 2 Jazzy + Gazebo Harmonic（`gz-harmonic`）+
+`ros-jazzy-ros-gz-bridge` + noVNC と重く、apt リポジトリ（OSRF/ROS）への到達性や
+ディスク容量で失敗することがあります（[README の既知の注意点](README.md#既知の注意点)）。
 
 **確認・解決:**
 ```bash
 # 詳細ログ付きで該当サービスのみビルド
 docker compose build --no-cache --progress=plain gazebo
 ```
-- bridge パッケージが見つからない場合は、`gazebo_simulator/Dockerfile` 内に
-  コメントで用意した **ソースビルドのフォールバック**（`IGNITION_VERSION=fortress`）
-  を有効化してください。
-- まずは bridge を含まない 3 コンテナ（`ros_master` `keyboard_controller`
-  `control_logic`）だけで疎通確認するのも有効です:
+- OSRF の apt 鍵/リポジトリ追加に失敗する場合はネットワーク/プロキシを確認。
+- まずは gazebo を除く 2 コンテナ（`keyboard_controller` `control_logic`）だけで
+  疎通確認するのも有効です:
   ```bash
-  docker compose up -d ros_master control_logic
+  docker compose up -d control_logic
   ```
 
 ---
@@ -139,58 +139,53 @@ docker compose build --no-cache --progress=plain gazebo
 ```
 [keyboard] ──/cmd_vel──▶ [control_logic] ──/gazebo/cmd_vel──▶ [gazebo(bridge)]
      │                          │                                   │
-     └──────────── ROS Master (ros_master:11311) ──────────────────┘
+     └──────── ROS 2 DDS discovery (masterless, ROS_DOMAIN_ID=42) ──┘
 ```
 
-### 2-1. `ROS_MASTER_URI not reachable` / `Unable to contact my own server`
+### 2-1. ノードが互いを見つけられない（トピックが空）
 
-**原因:** `ros_master` がまだ起動していない、または `ROS_MASTER_URI` が誤り。
+**原因:** ROS 2 はマスターレスで DDS により探索します。`ROS_DOMAIN_ID` が
+サービス間で不一致、または同一ネットワークに居ない、DDS マルチキャストが
+通っていない、などが原因。
 
 **確認:**
 ```bash
-# ros_master の状態とヘルスチェック
-docker compose ps ros_master
-docker compose logs ros_master | tail
+# 各サービスの ROS_DOMAIN_ID が一致しているか（本リポジトリでは 42）
+docker compose exec control_logic printenv ROS_DOMAIN_ID
+docker compose exec gazebo printenv ROS_DOMAIN_ID
 
-# 各コンテナ内の環境変数（service 名で解決される設計）
-docker compose exec control_logic printenv ROS_MASTER_URI
-# 期待値: http://ros_master:11311
-
-# roscore が応答するか（control_logic から）
+# control_logic からトピック/ノードが見えるか
 docker compose exec control_logic bash -lc \
-  "source /opt/ros/noetic/setup.bash && rosnode list"
+  "source /opt/ros/jazzy/setup.bash && ros2 topic list && ros2 node list"
 ```
 
 **解決:**
-- `docker-compose.yml` の各サービスに
-  `ROS_MASTER_URI=http://ros_master:11311` が設定されているか確認。
-- `ros_master` は healthcheck で準備完了を待つ設計です。起動直後は数秒待つ
-  （`run_keyboard.sh` は約 3 秒待機）。
-- 手動起動時は依存関係を尊重して `ros_master` から起動:
-  ```bash
-  docker compose up -d ros_master
-  ```
+- `docker-compose.yml` の全サービスに同じ `ROS_DOMAIN_ID=42` があるか確認。
+- 全サービスが同じ `ros_net` に接続しているか確認（2-3 参照）。
+- それでも探索しない場合、DDS のマルチキャスト不通が疑わしいので、Fast DDS の
+  discovery 設定（例: ピアの明示指定や discovery server）を検討。まずは
+  `docker compose down && docker compose up -d` で作り直す。
 
 ### 2-2. `Cannot publish to /cmd_vel` / トピックが見えない
 
-**確認（control_logic コンテナを ROS CLI として利用）:**
+**確認（control_logic コンテナを ROS 2 CLI として利用）:**
 ```bash
 RC="docker compose exec -T control_logic bash -lc"
 
 # 1) トピック一覧に /cmd_vel と /gazebo/cmd_vel があるか
-$RC "source /opt/ros/noetic/setup.bash && rostopic list"
+$RC "source /opt/ros/jazzy/setup.bash && ros2 topic list"
 
-# 2) パブリッシャ／サブスクライバを確認
-$RC "source /opt/ros/noetic/setup.bash && rostopic info /cmd_vel"
+# 2) パブリッシャ／サブスクライバ数を確認
+$RC "source /opt/ros/jazzy/setup.bash && ros2 topic info /cmd_vel"
 
 # 3) 実際に値が流れているか
-$RC "source /opt/ros/noetic/setup.bash && rostopic echo -n3 /cmd_vel"
+$RC "source /opt/ros/jazzy/setup.bash && timeout 3 ros2 topic echo /cmd_vel"
 
 # 4) 手動でテスト発行 → control_logic が /gazebo/cmd_vel に再発行するか
-$RC "source /opt/ros/noetic/setup.bash && \
-  timeout 3 rostopic pub -r10 /cmd_vel geometry_msgs/Twist \
+$RC "source /opt/ros/jazzy/setup.bash && \
+  timeout 3 ros2 topic pub -r10 /cmd_vel geometry_msgs/msg/Twist \
   '{linear: {x: 1.0}, angular: {z: 0.5}}'"
-$RC "source /opt/ros/noetic/setup.bash && rostopic echo -n1 /gazebo/cmd_vel"
+$RC "source /opt/ros/jazzy/setup.bash && ros2 topic echo --once /gazebo/cmd_vel"
 ```
 
 **よくある原因と対策:**
@@ -198,9 +193,9 @@ $RC "source /opt/ros/noetic/setup.bash && rostopic echo -n1 /gazebo/cmd_vel"
 - **トピック名の不一致**: 出力は必ず `/gazebo/cmd_vel`。`/cmd_vel` のまま
   Gazebo へ繋ぐとロボットは動きません（設計上の規約）。
 - **キーボード入力が無い**: 手動操作中はキーを押し続けないと速度は 0 のまま。
-  検証目的なら上記 4) の `rostopic pub` か、シナリオ再生（`--auto`）を使用。
+  検証目的なら上記 4) の `ros2 topic pub` か、シナリオ再生（`--auto`）を使用。
 
-### 2-3. `No route to host` / コンテナ間で名前解決できない
+### 2-3. コンテナ間で探索/到達できない
 
 **原因:** 各サービスが同じ Docker ネットワーク `ros_net` に接続していない、
 またはネットワークが壊れている。
@@ -208,10 +203,10 @@ $RC "source /opt/ros/noetic/setup.bash && rostopic echo -n1 /gazebo/cmd_vel"
 **確認:**
 ```bash
 docker network inspect gazebo-keyboard-control_ros_net
-# 4 つのコンテナが Containers に並んでいるか
+# 3 つのコンテナが Containers に並んでいるか
 
-# control_logic から ros_master へ到達できるか
-docker compose exec control_logic getent hosts ros_master
+# control_logic から gazebo へ到達できるか
+docker compose exec control_logic getent hosts gazebo
 ```
 
 **解決:**
@@ -236,22 +231,22 @@ docker compose up -d
 Web UI は **noVNC**（Xvfb + x11vnc + websockify）で Gazebo GUI を配信します。
 
 ```
-ブラウザ :8080 ──▶ websockify/noVNC ──▶ x11vnc :5900 ──▶ Xvfb(:1) ◀── ign gazebo
+ブラウザ :8080 ──▶ websockify/noVNC ──▶ x11vnc :5900 ──▶ Xvfb(:1) ◀── gz sim
 ```
 
 **確認:**
 ```bash
 docker compose ps gazebo                       # 起動しているか
-docker compose logs gazebo | tail -40          # Xvfb/x11vnc/novnc/ign のログ
+docker compose logs gazebo | tail -40          # Xvfb/x11vnc/novnc/gz のログ
 curl -I http://localhost:8080                  # ホストから到達できるか
 docker compose exec gazebo ss -ltnp | grep -E '8080|5900'   # コンテナ内のリッスン
 ```
 
 **解決:**
-- `gazebo` が `Exited` → ログを確認。`ign gazebo` の起動失敗や Xvfb 未起動が多い。
+- `gazebo` が `Exited` → ログを確認。`gz sim` の起動失敗や Xvfb 未起動が多い。
 - ポート競合 → 1-2 を参照（`8080` を変更）。
 - `gazebo` がそもそもビルド/起動できない場合は 1-4 を参照。コンテナが落ちていても
-  キーボード→control_logic の経路は `rostopic echo /gazebo/cmd_vel` で確認できます。
+  キーボード→control_logic の経路は `ros2 topic echo /gazebo/cmd_vel` で確認できます。
 
 ### 3-2. `Cannot load URDF` / ロボットが表示されない
 
@@ -261,7 +256,7 @@ docker compose exec gazebo ss -ltnp | grep -E '8080|5900'   # コンテナ内の
 **確認:**
 ```bash
 # リソースパスにモデル/ワールドが含まれているか
-docker compose exec gazebo printenv IGN_GAZEBO_RESOURCE_PATH
+docker compose exec gazebo printenv GZ_SIM_RESOURCE_PATH
 # 期待値: /root/.gazebo/models:/root/.gazebo/worlds
 
 # モデルファイルがマウントされているか
@@ -292,7 +287,7 @@ python3 -c "import xml.dom.minidom as m; m.parse('gazebo_simulator/models/simple
   <max_step_size>0.001</max_step_size>          <!-- 0.002〜0.004 に上げると負荷減 -->
   <real_time_update_rate>1000</real_time_update_rate>
   ```
-- 可視化が不要なら GUI（noVNC）を止め、`ign gazebo -s`（サーバのみ）で実行すると
+- 可視化が不要なら GUI（noVNC）を止め、`gz sim -s`（サーバのみ）で実行すると
   大幅に軽くなります（`gazebo_simulator/entrypoint.sh` を調整）。
 - Docker Desktop の割当（CPU/メモリ）を増やす。M1 Mac で amd64
   エミュレーション時は特に遅くなるため、ネイティブ arm64 イメージを優先。
@@ -386,7 +381,7 @@ bash test_integration.sh --quick     # "Test 3: Latency Measurement" を参照
 
 # 発行レートの確認（約 20 Hz であること）
 docker compose exec -T control_logic bash -lc \
-  "source /opt/ros/noetic/setup.bash && timeout 3 rostopic hz /cmd_vel"
+  "source /opt/ros/jazzy/setup.bash && timeout 3 ros2 topic hz /cmd_vel"
 ```
 
 **チューニング:**
@@ -404,10 +399,10 @@ docker stats --no-stream    # コンテナ別の CPU/メモリ
 ```
 
 **対策:**
-- 最も重いのは `gazebo`（Ignition + ROS + noVNC）。可視化不要時は GUI/noVNC を
+- 最も重いのは `gazebo`（Gazebo Harmonic + ROS 2 + noVNC）。可視化不要時は GUI/noVNC を
   止める（3-3 参照）か、`gazebo` を起動しない構成で開発:
   ```bash
-  docker compose up -d ros_master control_logic
+  docker compose up -d control_logic
   ```
 - Docker Desktop のメモリ割当を見直す（少なすぎると OOM、過剰だとホストを圧迫）。
 - 使い終わったら確実に片付ける:

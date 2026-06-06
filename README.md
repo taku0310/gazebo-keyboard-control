@@ -1,30 +1,34 @@
 # gazebo-keyboard-control
 
-キーボード入力で Gazebo（Ignition Fortress）シミュレーション内のロボットを操作する、
-マルチコンテナ Docker + ROS 構成のデモです。差動二輪ロボットをキーボードで操作したり、
+キーボード入力で Gazebo Sim（Harmonic）シミュレーション内のロボットを操作する、
+マルチコンテナ Docker + ROS 2 構成のデモです。差動二輪ロボットをキーボードで操作したり、
 記録済みの JSON シナリオを再生して再現性のあるデモを実行できます。
 macOS / WSL2 / Ubuntu で同じように動作します。
 
 ```
 ┌──────────────────┐   /cmd_vel    ┌───────────────┐  /gazebo/cmd_vel  ┌──────────┐
 │ keyboard_         │ ───────────▶ │ control_logic │ ───────────────▶ │  gazebo  │
-│ controller        │   (Twist)     │ (safety/      │     (Twist)       │ (Ignition│
-│ (pynput → Twist)  │               │  smoothing)   │                   │ Fortress)│
+│ controller        │   (Twist)     │ (safety/      │     (Twist)       │ (Gazebo  │
+│ (pynput → Twist)  │               │  smoothing)   │                   │ Harmonic)│
 └──────────────────┘               └───────────────┘                   └──────────┘
           │                                 │                                 │
           └─────────────────────────────────┴─────────────────────────────────┘
-                              ROS Master (roscore) :11311
+                       ROS 2 DDS discovery (masterless, ROS_DOMAIN_ID)
                                                           Web UI (noVNC) :8080
 ```
 
 ## コンポーネント構成
 
+ROS 2 はマスターレスです（roscore コンテナはありません）。各ノードは同じ
+`ROS_DOMAIN_ID` を共有し、`ros_net` 上で DDS により相互探索します。
+
 | コンテナ | 役割 | 主要技術 |
 |-----------|------|----------|
-| `ros_master` | ノード登録・トピック探索のハブ（`roscore`） | `ros:noetic` |
-| `keyboard_controller` | キーボード入力 → `geometry_msgs/Twist` を `/cmd_vel` に 20 Hz で発行 | Python, pynput |
-| `control_logic` | 安全制約 + 平滑化 → `/gazebo/cmd_vel` を発行 | Python, rospy |
-| `gazebo` | 3D 物理演算 + Web 可視化 | Ignition Fortress, ros_ign bridge, noVNC |
+| `keyboard_controller` | キーボード入力 → `geometry_msgs/msg/Twist` を `/cmd_vel` に 20 Hz で発行 | Python, rclpy, pynput |
+| `control_logic` | 安全制約 + 平滑化 → `/gazebo/cmd_vel` を発行 | Python, rclpy |
+| `gazebo` | 3D 物理演算 + Web 可視化 | Gazebo Sim Harmonic, ros_gz bridge, noVNC |
+
+ベースは ROS 2 Jazzy（Ubuntu 24.04）。
 
 ### データフロー
 
@@ -32,14 +36,14 @@ macOS / WSL2 / Ubuntu で同じように動作します。
    変換し、`/cmd_vel` へ 20 Hz で発行します。
 2. **control_logic** が `/cmd_vel` を購読し、速度制限・加速度制限・指数平滑化・
    安全停止を適用して `/gazebo/cmd_vel` へ再発行します（処理は 10 ms 未満）。
-3. **gazebo** が `/gazebo/cmd_vel` を Ignition へブリッジしてロボットの差動駆動を
-   動かし、`/odom`・`/imu`・`/clock` を ROS へ返します。
+3. **gazebo** が `/gazebo/cmd_vel` を Gazebo へブリッジしてロボットの差動駆動を
+   動かし、`/odom`・`/imu`・`/clock` を ROS 2 へ返します。
 
 ## ディレクトリ構成
 
 ```
 .
-├── docker-compose.yml          # ros_net ブリッジ上の4コンテナ構成
+├── docker-compose.yml          # ros_net ブリッジ上の3コンテナ構成（マスターレス）
 ├── run_keyboard.sh             # 起動スクリプト (macOS / Linux / WSL)
 ├── run_keyboard.ps1            # 起動スクリプト (Windows)
 ├── test_integration.sh         # E2E 統合テスト
@@ -87,14 +91,14 @@ docker compose config >/dev/null && echo "compose OK"
 python3 -m unittest discover -s control_logic/tests
 ```
 
-> `gazebo` イメージは大きめです（Ignition Fortress + ROS Noetic + ros_ign bridge
-> + noVNC）。初回の `build` は数分かかり、以降はキャッシュされます。ROS Noetic ↔
-> Ignition Fortress のブリッジに関する注意は後述の **既知の注意点** を参照してください。
+> `gazebo` イメージは大きめです（Gazebo Harmonic + ROS 2 Jazzy + ros_gz bridge
+> + noVNC）。初回の `build` は数分かかり、以降はキャッシュされます。詳細は後述の
+> **既知の注意点** を参照してください。
 
 ## 実施手順
 
-起動スクリプトはバックエンドのサービス（`ros_master`・`control_logic`・`gazebo`）を
-デタッチ起動し、ROS Master の準備完了を待ってから keyboard_controller を対話的に
+起動スクリプトはバックエンドのサービス（`control_logic`・`gazebo`）を
+デタッチ起動し、数秒待って DDS 探索が整ってから keyboard_controller を対話的に
 起動します。`Ctrl+C` で全コンテナを停止・後片付けします。
 
 ### 1. キーボードによる手動操作
@@ -206,21 +210,22 @@ bash test_integration.sh          # --quick で長いシナリオをスキップ
 
 `simple_robot` は差動二輪ロボットです: 0.5×0.3×0.2 m のボックス車体（10 kg）、
 0.05 m の駆動輪2輪（continuous ジョイント、5 rad/s 制限）、前方キャスター。
-`gazebo_simulator/models/simple_robot/simple_robot.urdf` に慣性・摩擦・Ignition
+`gazebo_simulator/models/simple_robot/simple_robot.urdf` に慣性・摩擦・gz-sim
 DiffDrive プラグイン・IMU センサとともに定義されています。
 
 ## 既知の注意点
 
-本プロジェクトは **ROS Noetic（ROS1）** と **Gazebo Ignition Fortress** を併用します。
-両者は世代の異なるエコシステムであり、これらの橋渡しが主なリスク要因です:
+本プロジェクトは **ROS 2 Jazzy** と **Gazebo Sim Harmonic** を併用します。これは
+公式に第一級サポートされる組み合わせで、`ros_gz`（bridge / sim）が apt で素直に
+導入できます:
 
-- `gazebo` コンテナは Ignition イメージ上に ROS Noetic + `ros_ign` bridge を重ね、
-  GUI を **noVNC** で配信します（gzweb は Gazebo Classic 専用のため）。bridge パッケージ
-  の apt 可用性は Noetic+Fortress の組み合わせで変動し得ます。ソースビルドの
-  フォールバックは `gazebo_simulator/Dockerfile` に記載しています。
-- Ignition の既定物理エンジンは DART です。ワールドの `<physics type="ode">` 設定は
-  対応する範囲で反映されます。
+- `gazebo` コンテナは ROS 2 Jazzy ベースに Gazebo Harmonic（`gz-harmonic`）と
+  `ros-jazzy-ros-gz-bridge` を載せ、GUI を **noVNC** で配信します（Gazebo Sim には
+  組み込みの Web UI が無いため）。
+- Gazebo Harmonic の既定物理エンジンは DART です。ワールドの `<physics type="ode">`
+  設定は対応する範囲で反映されます。
 - ロボットは `z=0.5` でスポーンし、車輪上（約 0.13 m）に着地します。
+- ROS 2 はマスターレスで、ノードは同じ `ROS_DOMAIN_ID` のもと DDS で相互探索します。
 
 Python ノード・シナリオ・安全パイプラインはヘッドレスで検証済みです。フルの
 Docker/Gazebo ビルドとランタイムは、実際の Docker ホストでの検証が必要です。

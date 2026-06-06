@@ -13,7 +13,7 @@ to grow fast, deterministic, headless test coverage and keep CI meaningful.
 - **Unit tests** live in `control_logic/tests/` (Python `unittest`). They drive
   `ControlLogic.process()` in `dry_run=True` — no ROS, no display. This is the
   model to follow: test pure/near-pure logic directly.
-- **Headless executability**: `pynput` and `rospy` are lazily imported and
+- **Headless executability**: `pynput` and `rclpy` are lazily imported and
   guarded, and nodes support `--dry-run`. Tests must run with neither installed
   (the CI runner has no display and no ROS).
 - **Integration**: `test_integration.sh` exercises the real Docker stack
