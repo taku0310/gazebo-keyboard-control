@@ -17,7 +17,7 @@
 │
 ├─ 起動したがロボットが動かない
 │   │
-│   ├─ ros2 topic でトピックが見えない ──────────▶ 2. ROS 通信エラー
+│   ├─ /cmd_vel が出ない / 繋がらない ───────────▶ 2. 通信エラー (TCP / ROS)
 │   ├─ localhost:8080 が開けない ───────────────▶ 3. Gazebo エラー
 │   └─ キー入力が効かない ───────────────────────▶ 4. キーボード入力エラー
 │
@@ -124,23 +124,54 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 docker compose build --no-cache --progress=plain gazebo
 ```
 - OSRF の apt 鍵/リポジトリ追加に失敗する場合はネットワーク/プロキシを確認。
-- まずは gazebo を除く 2 コンテナ（`keyboard_controller` `control_logic`）だけで
+- まずは gazebo を除く ROS ノード（`ros_bridge` `control_logic`）だけで
   疎通確認するのも有効です:
   ```bash
-  docker compose up -d control_logic
+  docker compose up -d ros_bridge control_logic
   ```
 
 ---
 
-## 2. ROS 通信エラー
+## 2. 通信エラー（TCP / ROS）
 
-通信経路: `keyboard_controller → /cmd_vel → control_logic → /gazebo/cmd_vel → gazebo`
+通信経路:
+`keyboard → (TCP) → ros_bridge → /cmd_vel → control_logic → /gazebo/cmd_vel → gazebo`
 
 ```
-[keyboard] ──/cmd_vel──▶ [control_logic] ──/gazebo/cmd_vel──▶ [gazebo(bridge)]
-     │                          │                                   │
-     └──────── ROS 2 DDS discovery (masterless, ROS_DOMAIN_ID=42) ──┘
+[keyboard] ──TCP:9090──▶ [ros_bridge] ──/cmd_vel──▶ [control_logic] ──/gazebo/cmd_vel──▶ [gazebo]
+ (TCPクライアント)            │                          │                                   │
+                            └──── ROS 2 DDS discovery (masterless, ROS_DOMAIN_ID=42) ───────┘
 ```
+
+> 最初に切り分け: ロボットが動かないとき、**TCP 境界**（keyboard→ros_bridge）と
+> **DDS 境界**（ros_bridge→control_logic→gazebo）のどちらで止まっているかを
+> `ros2 topic echo /cmd_vel` で判定できます。`/cmd_vel` に値が出ていれば TCP は
+> 通っており、問題は DDS 側（2-1）。出ていなければ TCP 側（2-0）。
+
+### 2-0. keyboard が ros_bridge に繋がらない / `/cmd_vel` が出ない
+
+**原因:** `ros_bridge` 未起動、`BRIDGE_HOST`/`BRIDGE_PORT` 不一致、ネットワーク不通。
+
+**確認:**
+```bash
+# ros_bridge が起動し、9090 を listen しているか
+docker compose ps ros_bridge
+docker compose logs ros_bridge | tail
+docker compose exec ros_bridge ss -ltnp | grep 9090
+
+# TCP 経路を直接叩いて /cmd_vel に出るか（keyboard を介さず）
+printf '{"linear_x":1.0,"angular_z":0.5}\n' | nc localhost 9090
+docker compose exec -T control_logic bash -lc \
+  "source /opt/ros/jazzy/setup.bash && timeout 3 ros2 topic echo /cmd_vel"
+```
+
+**解決:**
+- keyboard は `BRIDGE_HOST=ros_bridge`（compose 既定）でサービス名解決。ローカル
+  実行時は `--bridge-host localhost --bridge-port 9090`。
+- keyboard は未接続でも自動再接続します。`⏳ waiting for ros_bridge ...` が続く
+  場合は ros_bridge 側のログ/ポートを確認。
+- `ros_bridge` は無通信が `--watchdog` 秒（既定 0.5）続くとゼロ速度を発行します。
+  送信が 20 Hz 未満で途切れると停止と再開を繰り返すことがあります。
 
 ### 2-1. ノードが互いを見つけられない（トピックが空）
 
@@ -211,10 +242,12 @@ $RC "source /opt/ros/jazzy/setup.bash && ros2 topic echo --once /gazebo/cmd_vel"
 **確認:**
 ```bash
 docker network inspect gazebo-keyboard-control_ros_net
-# 3 つのコンテナが Containers に並んでいるか
+# ros_bridge / control_logic / gazebo（実行中は keyboard_controller も）が
+# Containers に並んでいるか
 
-# control_logic から gazebo へ到達できるか
+# control_logic から gazebo / ros_bridge へ到達できるか
 docker compose exec control_logic getent hosts gazebo
+docker compose exec control_logic getent hosts ros_bridge
 ```
 
 **解決:**
@@ -335,6 +368,8 @@ python3 -c "import xml.dom.minidom as m; m.parse('gazebo_simulator/models/simple
   （システム設定 → プライバシーとセキュリティ → アクセシビリティ）。
 - **入力はしているが速度が 0**: 反対キーの同時押し（W+S など）は相殺されます。
   `R` でリセット、`📊 linear.x=… angular.z=…` のデバッグ表示で状態を確認。
+- **`📊` は出るのにロボットが動かない**: キー入力は効いているので、問題は
+  TCP→ROS 側です。**2-0**（keyboard→ros_bridge 接続）を参照。
 - **どうしても効かない場合**: シナリオ自動再生で経路の動作確認:
   ```bash
   bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json --auto

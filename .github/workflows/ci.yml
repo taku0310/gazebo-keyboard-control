@@ -23,7 +23,7 @@ jobs:
 
       - name: Python syntax (compile all .py)
         run: |
-          python -m compileall -q keyboard_input control_logic
+          python -m compileall -q keyboard_input control_logic ros_bridge
 
       - name: control_logic unit tests (headless)
         run: |
@@ -32,6 +32,10 @@ jobs:
       - name: keyboard_input unit tests (headless)
         run: |
           python -m unittest discover -s keyboard_input/tests -v
+
+      - name: ros_bridge unit tests (headless)
+        run: |
+          python -m unittest discover -s ros_bridge/tests -v
 
       - name: keyboard_controller scenario smoke test (dry-run)
         run: |

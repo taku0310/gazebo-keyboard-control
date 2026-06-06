@@ -1,56 +1,75 @@
 # gazebo-keyboard-control
 
-キーボード入力で Gazebo Sim（Harmonic）シミュレーション内のロボットを操作する、
-マルチコンテナ Docker + ROS 2 構成のデモです。差動二輪ロボットをキーボードで操作したり、
-記録済みの JSON シナリオを再生して再現性のあるデモを実行できます。
+キーボード（将来は SoftPLC）入力で Gazebo Sim（Harmonic）シミュレーション内の
+ロボットを操作する、マルチコンテナ Docker + ROS 2 構成のデモです。差動二輪ロボットを
+操作したり、記録済みの JSON シナリオを再生して再現性のあるデモを実行できます。
 macOS / WSL2 / Ubuntu で同じように動作します。
 
+コマンド送信元は **TCP 境界**で ROS 2 から分離されています。送信元（キーボード／
+SoftPLC）は JSON Lines を TCP で `ros_bridge` に送るだけで、ROS を意識しません。
+
 ```
-┌──────────────────┐   /cmd_vel    ┌───────────────┐  /gazebo/cmd_vel  ┌──────────┐
-│ keyboard_         │ ───────────▶ │ control_logic │ ───────────────▶ │  gazebo  │
-│ controller        │   (Twist)     │ (safety/      │     (Twist)       │ (Gazebo  │
-│ (stdin/pynput→Twist)│             │  smoothing)   │                   │ Harmonic)│
-└──────────────────┘               └───────────────┘                   └──────────┘
-          │                                 │                                 │
-          └─────────────────────────────────┴─────────────────────────────────┘
-                       ROS 2 DDS discovery (masterless, ROS_DOMAIN_ID)
-                                                          Web UI (noVNC) :8080
+┌─────────────────┐  TCP   ┌────────────┐ /cmd_vel ┌───────────────┐/gazebo/cmd_vel┌──────────┐
+│ keyboard_       │ ─────▶ │ ros_bridge │ ───────▶ │ control_logic │ ───────────▶ │  gazebo  │
+│ controller      │ (JSON  │ (TCP→ROS2) │ (Twist)   │ (safety/      │   (Twist)     │ (Gazebo  │
+│ (stdin/pynput)  │ Lines) │            │           │  smoothing)   │               │ Harmonic)│
+└─────────────────┘        └────────────┘           └───────────────┘               └──────────┘
+ （将来は SoftPLC）             :9090            └──── ROS 2 DDS (masterless) ────┘
+                                                              Web UI (noVNC) :8080
 ```
 
 ## コンポーネント構成
 
-ROS 2 はマスターレスです（roscore コンテナはありません）。各ノードは同じ
-`ROS_DOMAIN_ID` を共有し、`ros_net` 上で DDS により相互探索します。
+`ros_bridge`・`control_logic`・`gazebo` の 3 つが ROS 2 ノードです。ROS 2 は
+マスターレスで（roscore コンテナはありません）、同じ `ROS_DOMAIN_ID` を共有して
+`ros_net` 上で DDS により相互探索します。`keyboard_controller` は **ROS を使わない
+TCP クライアント**です。
 
 | コンテナ | 役割 | 主要技術 |
 |-----------|------|----------|
-| `keyboard_controller` | キーボード入力 → `geometry_msgs/msg/Twist` を `/cmd_vel` に 20 Hz で発行 | Python, rclpy, stdin/pynput |
+| `keyboard_controller` | キー/シナリオ → JSON Lines を TCP で `ros_bridge` へ 20 Hz 送信 | Python（ROS 非依存）, stdin/pynput |
+| `ros_bridge` | TCP(JSON) を受信 → `geometry_msgs/msg/Twist` を `/cmd_vel` に発行（切断時ゼロ化） | Python, rclpy |
 | `control_logic` | 安全制約 + 平滑化 → `/gazebo/cmd_vel` を発行 | Python, rclpy |
 | `gazebo` | 3D 物理演算 + Web 可視化 | Gazebo Sim Harmonic, ros_gz bridge, noVNC |
 
-ベースは ROS 2 Jazzy（Ubuntu 24.04）。
+ROS ノードのベースは ROS 2 Jazzy（Ubuntu 24.04）。`keyboard_controller` は軽量な
+`python:3.12-slim`。
 
 ### データフロー
 
-1. **keyboard_controller** がキー入力（または JSON シナリオ）を `Twist` メッセージに
-   変換し、`/cmd_vel` へ 20 Hz で発行します。
-2. **control_logic** が `/cmd_vel` を購読し、速度制限・加速度制限・指数平滑化・
+1. **keyboard_controller**（将来は SoftPLC）がキー入力（または JSON シナリオ）を
+   `{"linear_x":…,"angular_z":…}` の JSON Lines に変換し、TCP で `ros_bridge:9090`
+   へ 20 Hz 送信します。
+2. **ros_bridge** が TCP の JSON を購読し、`Twist` として `/cmd_vel` へ発行します。
+   `--watchdog` 秒（既定 0.5）無通信ならゼロ速度を発行して安全に停止します。
+3. **control_logic** が `/cmd_vel` を購読し、速度制限・加速度制限・指数平滑化・
    安全停止を適用して `/gazebo/cmd_vel` へ再発行します（処理は 10 ms 未満）。
-3. **gazebo** が `/gazebo/cmd_vel` を Gazebo へブリッジしてロボットの差動駆動を
+4. **gazebo** が `/gazebo/cmd_vel` を Gazebo へブリッジしてロボットの差動駆動を
    動かし、`/odom`・`/imu`・`/clock` を ROS 2 へ返します。
+
+> **将来の SoftPLC 連携:** `ros_bridge:9090` へ同じ JSON Lines を TCP 送信できれば、
+> keyboard_controller を SoftPLC（や Modbus/OPC UA ゲートウェイ）に置き換えるだけで
+> 同じ経路に載ります。`control_logic` 以降は無変更です。
 
 ## ディレクトリ構成
 
 ```
 .
-├── docker-compose.yml          # ros_net ブリッジ上の3コンテナ構成（マスターレス）
+├── docker-compose.yml          # ros_net 上の4コンテナ構成（マスターレス）
+├── docker-compose.discovery.yml # DDS Discovery Server overlay（任意）
 ├── run_keyboard.sh             # 起動スクリプト (macOS / Linux / WSL)
 ├── run_keyboard.ps1            # 起動スクリプト (Windows)
 ├── test_integration.sh         # E2E 統合テスト
-├── keyboard_input/             # keyboard_controller コンテナ
+├── keyboard_input/             # keyboard_controller コンテナ（TCP クライアント）
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   └── src/keyboard_input_controller.py
+│   ├── src/keyboard_input_controller.py
+│   └── tests/test_stdin_input.py  # ヘッドレス単体テスト
+├── ros_bridge/                 # ros_bridge コンテナ（TCP→ROS2）
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── src/ros_bridge.py
+│   └── tests/test_parse.py        # ヘッドレス単体テスト
 ├── control_logic/              # control_logic コンテナ
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -97,9 +116,9 @@ python3 -m unittest discover -s control_logic/tests
 
 ## 実施手順
 
-起動スクリプトはバックエンドのサービス（`control_logic`・`gazebo`）を
-デタッチ起動し、数秒待って DDS 探索が整ってから keyboard_controller を対話的に
-起動します。`Ctrl+C` で全コンテナを停止・後片付けします。
+起動スクリプトはバックエンドのサービス（`ros_bridge`・`control_logic`・`gazebo`）を
+デタッチ起動し、数秒待ってから keyboard_controller を対話的に起動します（TCP で
+`ros_bridge` に接続）。`Ctrl+C` で全コンテナを停止・後片付けします。
 
 ### 1. キーボードによる手動操作
 
@@ -227,6 +246,12 @@ DiffDrive プラグイン・IMU センサとともに定義されています。
   と `real_time_*` のみ確実に反映されます（ODE 専用の solver/constraints 設定は
   DART では無効なので、混乱を避けるため world から削除しています）。
 - ロボットは `z=0.5` でスポーンし、車輪上（約 0.13 m）に着地します。
+- **TCP 境界 / SoftPLC 連携**: 送信元は `ros_bridge:9090` へ JSON Lines
+  （`{"linear_x":…,"angular_z":…}`）を送るだけで ROS を意識しません。`ros_bridge`
+  は `--watchdog` 秒（既定 0.5）無通信でゼロ速度を発行し、クライアント切断時に
+  ロボットを停止します。SoftPLC や Modbus/OPC UA ゲートウェイは
+  keyboard_controller の置き換えとして同じポートに接続できます。詳細は
+  `ros_bridge/src/README.md`。
 - **キー入力**は既定で TTY が attach されていれば `stdin (termios)`、なければ
   pynput（表示が必要）の順で自動選択されます。コンテナ内では stdin モードが
   使われるため、ホストの表示バックエンドに依存しません。`--input stdin` /
@@ -240,6 +265,27 @@ DiffDrive プラグイン・IMU センサとともに定義されています。
 
 Python ノード・シナリオ・安全パイプラインはヘッドレスで検証済みです。フルの
 Docker/Gazebo ビルドとランタイムは、実際の Docker ホストでの検証が必要です。
+
+## セキュリティ
+
+本リポジトリは**ローカル単一ホストのデモ**を前提にした既定値です。ネットワークに
+公開する場合は以下に注意してください。
+
+- **公開ポートは既定で localhost のみ**にバインドします（`127.0.0.1:9090`・
+  `127.0.0.1:8080`）。外部公開は明示オプトイン（`.env.example` 参照）:
+  - `BRIDGE_BIND=0.0.0.0` … ros_bridge を外部公開（SoftPLC 接続用）
+  - `WEBUI_BIND=0.0.0.0` … Gazebo Web UI を外部公開
+- **`ros_bridge`(:9090) は無認証**です。到達できれば誰でも速度指令を注入できます。
+  外部公開時は**ファイアウォール / VPN / 専用 NW** で必ず保護してください。
+- **Gazebo Web UI(:8080) も既定で無認証**です。`VNC_PASSWORD` を設定すると
+  noVNC/VNC にパスワードを要求します（外部公開時は必須推奨）。
+- **入力検証**: `ros_bridge` は不正 JSON・**NaN/Infinity**（フィルタを破壊しうる）・
+  過大な行（メモリ枯渇 DoS）・過剰な同時接続を拒否します。`control_logic` も
+  非有限値を 0 に正規化し、速度・加速度を上限にクリップします（多層防御）。
+- **最小権限**: `ros_bridge` / `keyboard_controller` / `control_logic` は
+  **非 root** で実行します（`gazebo` は X/VNC の都合で root）。
+- **DDS は既定で無認証**です。共有ネットワークで使う場合は `ROS_DOMAIN_ID` で分離し、
+  本格運用では SROS2（DDS Security）を検討してください。
 
 ## トラブルシューティング
 

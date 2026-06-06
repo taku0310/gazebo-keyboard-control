@@ -17,6 +17,7 @@ latency per cycle.
 """
 
 import argparse
+import math
 import sys
 import time
 
@@ -206,6 +207,15 @@ class ControlLogic:
         controller's current/filtered state.
         """
         start = time.perf_counter()
+        # Defense in depth: a non-finite target (NaN/Inf) would slip through
+        # clip()/rate_limit() (their comparisons are False for NaN) and lock the
+        # exponential filter at NaN forever. Treat non-finite as zero. The
+        # upstream ros_bridge already rejects these, but control_logic must not
+        # rely on that (it could receive /cmd_vel from any source).
+        if not math.isfinite(target_linear):
+            target_linear = 0.0
+        if not math.isfinite(target_angular):
+            target_angular = 0.0
         if dt is None:
             dt = self.dt
         # Clamp dt to a sane range. A zero/negative dt would let infinite

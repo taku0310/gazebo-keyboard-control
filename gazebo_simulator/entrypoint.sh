@@ -27,7 +27,18 @@ Xvfb "${DISPLAY_NUM}" -screen 0 1280x720x24 &
 sleep 2
 
 echo "🌐 Starting VNC + noVNC web UI on :${WEB_PORT}..."
-x11vnc -display "${DISPLAY_NUM}" -forever -shared -nopw -rfbport "${VNC_PORT}" -bg -quiet
+# Optional VNC auth: if VNC_PASSWORD is set, require it; otherwise run open
+# (acceptable only because the host port is localhost-only by default).
+if [ -n "${VNC_PASSWORD:-}" ]; then
+  x11vnc -storepasswd "${VNC_PASSWORD}" /tmp/.vncpass >/dev/null 2>&1
+  VNC_AUTH=(-rfbauth /tmp/.vncpass)
+  echo "🔐 VNC password authentication enabled."
+else
+  VNC_AUTH=(-nopw)
+  echo "⚠️  VNC has no password (set VNC_PASSWORD to require one)."
+fi
+x11vnc -display "${DISPLAY_NUM}" -forever -shared "${VNC_AUTH[@]}" \
+  -rfbport "${VNC_PORT}" -bg -quiet
 # noVNC ships a launcher; fall back to websockify if not present.
 if [ -x /usr/share/novnc/utils/novnc_proxy ]; then
   /usr/share/novnc/utils/novnc_proxy --vnc "localhost:${VNC_PORT}" --listen "${WEB_PORT}" &

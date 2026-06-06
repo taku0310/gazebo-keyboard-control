@@ -133,16 +133,17 @@ trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------- #
 # Start the backing services (everything except keyboard_controller).
-# ROS 2 is masterless - there is no roscore; nodes discover over DDS.
+# keyboard_controller is a TCP client of ros_bridge; ros_bridge is the DDS
+# publisher of /cmd_vel. ROS 2 is masterless - nodes discover over DDS.
 # ---------------------------------------------------------------------------- #
-echo "🚀 Starting backing services (control_logic, gazebo)..."
-if ! "${COMPOSE[@]}" up -d control_logic gazebo; then
+echo "🚀 Starting backing services (ros_bridge, control_logic, gazebo)..."
+if ! "${COMPOSE[@]}" up -d ros_bridge control_logic gazebo; then
   echo "❌ Failed to start services. See output above."
   exit 1
 fi
 
 # Give the services a moment to come up and discover each other over DDS.
-echo "⏳ Waiting for services (ROS 2 DDS discovery)..."
+echo "⏳ Waiting for services (ROS 2 DDS discovery + bridge TCP)..."
 sleep 3
 echo "✅ Services should be up."
 

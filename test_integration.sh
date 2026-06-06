@@ -131,11 +131,17 @@ section "Test 1: Container Startup"
 # so a headless `up -d` instance would exit immediately - checking it for
 # "running" here would be a guaranteed false failure.
 echo "  🚀 Starting backing services (docker compose up -d)..."
-if ! dc up -d control_logic gazebo >/dev/null 2>&1; then
-  fail "└─" "docker compose up failed" "$(dc up -d control_logic gazebo 2>&1 | tail -3)"
+if ! dc up -d ros_bridge control_logic gazebo >/dev/null 2>&1; then
+  fail "└─" "docker compose up failed" "$(dc up -d ros_bridge control_logic gazebo 2>&1 | tail -3)"
 else
   # ROS 2 is masterless; wait until the CLI can list topics over DDS.
   wait_for 30 ros_cli "ros2 topic list" || true
+
+  if is_running ros_bridge; then
+    pass "├─" "ros_bridge running"
+  else
+    fail "├─" "ros_bridge not running" "$(dc logs --tail 5 ros_bridge 2>&1 | tail -3)"
+  fi
 
   if is_running control_logic; then
     pass "├─" "control_logic running"
@@ -219,6 +225,36 @@ else
   warn "└─" "No subscriber on /gazebo/cmd_vel" \
     "needs the gazebo container + ros_gz_bridge"
 fi
+
+# ============================================================================ #
+# Test 2b: ROS Bridge (TCP JSON Lines -> /cmd_vel)
+# ============================================================================ #
+section "Test 2b: ROS Bridge (TCP -> /cmd_vel)"
+
+# Send a steady JSON Lines stream to the bridge over TCP (from inside the
+# control_logic container, reaching ros_bridge by service name) and confirm it
+# is republished on /cmd_vel. A distinct value (1.5) proves it is the bridge,
+# not the ros2-topic-pub publisher from Test 2.
+dc exec -T control_logic python3 -c '
+import socket, time
+try:
+    s = socket.create_connection(("ros_bridge", 9090), timeout=3)
+    for _ in range(80):  # ~4 s at 20 Hz
+        s.sendall(b"{\"linear_x\":1.5,\"angular_z\":0.5}\n")
+        time.sleep(0.05)
+    s.close()
+except OSError:
+    pass
+' >/dev/null 2>&1 &
+TCP_PID=$!
+sleep 1
+
+if ros_cli "timeout 3 ros2 topic echo /cmd_vel" | grep -q "x: 1.5"; then
+  pass "└─" "TCP JSON reached /cmd_vel via ros_bridge"
+else
+  fail "└─" "ros_bridge did not republish TCP command to /cmd_vel"
+fi
+wait "$TCP_PID" 2>/dev/null || true
 
 # ============================================================================ #
 # Test 3: E2E latency measurement.

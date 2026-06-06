@@ -1,0 +1,6 @@
+# ROS Bridge container Python dependencies
+#
+# rclpy and geometry_msgs ship with the ROS 2 Jazzy base image and are resolved
+# via the sourced ROS environment, not pip. The TCP server uses only the Python
+# standard library (socket, json, threading). This file is intentionally empty
+# of third-party requirements.
