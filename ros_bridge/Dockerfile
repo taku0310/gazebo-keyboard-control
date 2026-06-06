@@ -21,7 +21,8 @@ ENV PYTHONUNBUFFERED=1
 
 # Drop privileges: run as a non-root user (defense in depth). The listen port
 # (9090) is > 1024, so no root is needed. A home dir is provided for ROS logs.
-RUN useradd -m -u 1000 appuser && chown -R appuser /app
+# UID is auto-assigned: the Ubuntu base image already ships a user at UID 1000.
+RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 ENV HOME=/home/appuser
 

@@ -22,7 +22,8 @@ COPY src/ /app/src/
 ENV PYTHONUNBUFFERED=1
 
 # Drop privileges: run as a non-root user (defense in depth).
-RUN useradd -m -u 1000 appuser && chown -R appuser /app
+# UID is auto-assigned: the Ubuntu base image already ships a user at UID 1000.
+RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 ENV HOME=/home/appuser
 
