@@ -1,9 +1,9 @@
 # gazebo-keyboard-control
 
-Keyboard-driven robot control in a Gazebo (Ignition Fortress) simulation,
-wired together over ROS in a multi-container Docker stack. Drive a
-differential-drive robot with the keyboard, or replay recorded JSON scenarios
-for reproducible demos. Runs the same way on macOS, WSL2 and Ubuntu.
+キーボード入力で Gazebo（Ignition Fortress）シミュレーション内のロボットを操作する、
+マルチコンテナ Docker + ROS 構成のデモです。差動二輪ロボットをキーボードで操作したり、
+記録済みの JSON シナリオを再生して再現性のあるデモを実行できます。
+macOS / WSL2 / Ubuntu で同じように動作します。
 
 ```
 ┌──────────────────┐   /cmd_vel    ┌───────────────┐  /gazebo/cmd_vel  ┌──────────┐
@@ -17,89 +17,87 @@ for reproducible demos. Runs the same way on macOS, WSL2 and Ubuntu.
                                                           Web UI (noVNC) :8080
 ```
 
-## Components
+## コンポーネント構成
 
-| Container | Role | Key tech |
+| コンテナ | 役割 | 主要技術 |
 |-----------|------|----------|
-| `ros_master` | Node registration / topic discovery hub (`roscore`) | `ros:noetic` |
-| `keyboard_controller` | Keyboard input → `geometry_msgs/Twist` on `/cmd_vel` @ 20 Hz | Python, pynput |
-| `control_logic` | Safety constraints + smoothing → `/gazebo/cmd_vel` | Python, rospy |
-| `gazebo` | 3D physics + web visualization | Ignition Fortress, ros_ign bridge, noVNC |
+| `ros_master` | ノード登録・トピック探索のハブ（`roscore`） | `ros:noetic` |
+| `keyboard_controller` | キーボード入力 → `geometry_msgs/Twist` を `/cmd_vel` に 20 Hz で発行 | Python, pynput |
+| `control_logic` | 安全制約 + 平滑化 → `/gazebo/cmd_vel` を発行 | Python, rospy |
+| `gazebo` | 3D 物理演算 + Web 可視化 | Ignition Fortress, ros_ign bridge, noVNC |
 
-### Data flow
+### データフロー
 
-1. **keyboard_controller** turns key presses (or a JSON scenario) into `Twist`
-   messages on `/cmd_vel` at 20 Hz.
-2. **control_logic** subscribes to `/cmd_vel`, applies velocity limits,
-   acceleration limits, exponential smoothing and safety stops, then
-   republishes to `/gazebo/cmd_vel` (< 10 ms processing).
-3. **gazebo** bridges `/gazebo/cmd_vel` into Ignition, drives the robot's
-   differential drive, and publishes `/odom`, `/imu`, `/clock` back to ROS.
+1. **keyboard_controller** がキー入力（または JSON シナリオ）を `Twist` メッセージに
+   変換し、`/cmd_vel` へ 20 Hz で発行します。
+2. **control_logic** が `/cmd_vel` を購読し、速度制限・加速度制限・指数平滑化・
+   安全停止を適用して `/gazebo/cmd_vel` へ再発行します（処理は 10 ms 未満）。
+3. **gazebo** が `/gazebo/cmd_vel` を Ignition へブリッジしてロボットの差動駆動を
+   動かし、`/odom`・`/imu`・`/clock` を ROS へ返します。
 
-## Repository layout
+## ディレクトリ構成
 
 ```
 .
-├── docker-compose.yml          # 4-container stack on the ros_net bridge
-├── run_keyboard.sh             # launcher (macOS / Linux / WSL)
-├── run_keyboard.ps1            # launcher (Windows)
-├── test_integration.sh         # end-to-end integration tests
-├── keyboard_input/             # keyboard_controller container
+├── docker-compose.yml          # ros_net ブリッジ上の4コンテナ構成
+├── run_keyboard.sh             # 起動スクリプト (macOS / Linux / WSL)
+├── run_keyboard.ps1            # 起動スクリプト (Windows)
+├── test_integration.sh         # E2E 統合テスト
+├── keyboard_input/             # keyboard_controller コンテナ
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── src/keyboard_input_controller.py
-├── control_logic/              # control_logic container
+├── control_logic/              # control_logic コンテナ
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── src/control.py
-│   └── tests/test_control.py   # headless unit tests (no ROS needed)
-├── gazebo_simulator/           # gazebo container
+│   └── tests/test_control.py   # ヘッドレス単体テスト（ROS 不要）
+├── gazebo_simulator/           # gazebo コンテナ
 │   ├── Dockerfile
 │   ├── entrypoint.sh
 │   ├── models/simple_robot/    # URDF + model.config
-│   └── worlds/empty.world      # SDF world
-└── scenarios/                  # JSON demo scenarios
+│   └── worlds/empty.world      # SDF ワールド
+└── scenarios/                  # JSON デモシナリオ
     ├── demo_scenario_01.json   # "Simple Forward Motion"
     └── demo_scenario_02.json   # "Square Pattern"
 ```
 
-## Prerequisites（前提条件）
+## 前提条件
 
-- **Docker** (Engine 20.10+) and **Docker Compose** v2 (`docker compose`) — or
-  legacy v1 (`docker-compose`); both are auto-detected by the launchers.
-- One of: **macOS** (Docker Desktop), **WSL2** on Windows (Docker Desktop with
-  the WSL2 backend), or **Ubuntu/Linux** (Docker Engine).
-- A web browser (to view the simulator at `localhost:8080`).
-- No local Python/ROS install is needed — everything runs in containers. (The
-  optional headless unit tests need only Python 3.)
+- **Docker**（Engine 20.10 以上）と **Docker Compose** v2（`docker compose`）。
+  旧 v1（`docker-compose`）も可。起動スクリプトが自動判別します。
+- 動作環境のいずれか: **macOS**（Docker Desktop）、Windows の **WSL2**
+  （Docker Desktop の WSL2 バックエンド）、**Ubuntu/Linux**（Docker Engine）。
+- Web ブラウザ（`localhost:8080` でシミュレータを表示するため）。
+- ローカルへの Python/ROS インストールは不要です（すべてコンテナ内で動作）。
+  任意のヘッドレス単体テストのみ Python 3 が必要です。
 
-## Setup（導入手順）
+## 導入手順
 
 ```bash
-# 1. Clone the repository
+# 1. リポジトリを取得
 git clone https://github.com/taku0310/gazebo-keyboard-control.git
 cd gazebo-keyboard-control
 
-# 2. Build the container images (first run only; takes a while for Gazebo)
+# 2. コンテナイメージをビルド（初回のみ。Gazebo は時間がかかります）
 docker compose build
 
-# 3. (Optional) sanity-check the compose file and run the headless unit tests
+# 3.（任意）compose ファイルの健全性チェックとヘッドレス単体テスト
 docker compose config >/dev/null && echo "compose OK"
 python3 -m unittest discover -s control_logic/tests
 ```
 
-> The `gazebo` image is large (Ignition Fortress + ROS Noetic + the ros_ign
-> bridge + noVNC). The first `build` will take several minutes; later runs are
-> cached. See **Known caveats** below for the ROS Noetic ↔ Ignition Fortress
-> bridge notes.
+> `gazebo` イメージは大きめです（Ignition Fortress + ROS Noetic + ros_ign bridge
+> + noVNC）。初回の `build` は数分かかり、以降はキャッシュされます。ROS Noetic ↔
+> Ignition Fortress のブリッジに関する注意は後述の **既知の注意点** を参照してください。
 
-## Usage（実施手順）
+## 実施手順
 
-The launcher scripts start the backing services (`ros_master`, `control_logic`,
-`gazebo`) detached, wait for ROS Master, then run the keyboard controller
-interactively. `Ctrl+C` stops and tears down everything.
+起動スクリプトはバックエンドのサービス（`ros_master`・`control_logic`・`gazebo`）を
+デタッチ起動し、ROS Master の準備完了を待ってから keyboard_controller を対話的に
+起動します。`Ctrl+C` で全コンテナを停止・後片付けします。
 
-### 1. Manual keyboard control
+### 1. キーボードによる手動操作
 
 ```bash
 # macOS / Linux / WSL2
@@ -110,58 +108,56 @@ bash run_keyboard.sh
 .\run_keyboard.ps1
 ```
 
-Drive the robot with the keys below, and watch it move in the browser at
-**http://localhost:8080**.
+下記のキーでロボットを操作し、ブラウザ **http://localhost:8080** で動きを確認します。
 
-### 2. Scenario playback（自動再生）
+### 2. シナリオの自動再生
 
 ```bash
-# Load a scenario, then press SPACE to start:
+# シナリオを読み込み、SPACE キーで再生開始:
 bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json
 
-# Or auto-play on startup and exit when finished (reproducible demo):
+# 起動時に自動再生し、終了後に終了（再現性デモ向け）:
 bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json --auto
 ```
 ```powershell
 .\run_keyboard.ps1 -Scenario "scenarios/demo_scenario_01.json" -Auto
 ```
 
-Optional flags: `--log <file>` to tee output to a log file; `bash run_keyboard.sh --help`.
+任意フラグ: `--log <file>` で出力をログファイルにも記録。`bash run_keyboard.sh --help` でヘルプ表示。
 
-### 3. View the simulation
+### 3. シミュレーションの表示
 
-Open **http://localhost:8080** in a browser (noVNC streams the Gazebo GUI).
+ブラウザで **http://localhost:8080** を開きます（noVNC が Gazebo GUI を配信）。
 
-### 4. Stop
+### 4. 停止
 
-Press `Ctrl+C` in the launcher terminal — it runs `docker compose down` to stop
-all containers. To stop manually: `docker compose down`.
+起動スクリプトのターミナルで `Ctrl+C` を押すと `docker compose down` が実行され、
+全コンテナが停止します。手動で停止する場合は `docker compose down`。
 
-### 5. Run tests
+### 5. テストの実行
 
 ```bash
-# Headless unit tests (no Docker/ROS needed):
+# ヘッドレス単体テスト（Docker / ROS 不要）:
 python3 -m unittest discover -s control_logic/tests
 
-# Full integration tests (requires Docker):
-bash test_integration.sh            # --quick to skip the long scenario
+# フル統合テスト（Docker が必要）:
+bash test_integration.sh            # --quick で長いシナリオをスキップ
 ```
 
+### キーバインド
 
-### Key bindings
-
-| Key | Action | Key | Action |
+| キー | 動作 | キー | 動作 |
 |-----|--------|-----|--------|
-| `W` / `↑` | forward | `+` / `=` | speed scale up |
-| `S` / `↓` | backward | `-` / `_` | speed scale down |
-| `A` / `←` | turn left | `R` | reset velocities |
-| `D` / `→` | turn right | `SPACE` | play scenario |
-| | | `Q` / `ESC` | quit |
+| `W` / `↑` | 前進 | `+` / `=` | 速度スケール アップ |
+| `S` / `↓` | 後退 | `-` / `_` | 速度スケール ダウン |
+| `A` / `←` | 左旋回 | `R` | 速度リセット |
+| `D` / `→` | 右旋回 | `SPACE` | シナリオ再生 |
+| | | `Q` / `ESC` | 終了 |
 
-## Scenarios
+## シナリオ
 
-JSON files in `scenarios/` describe a timeline of `Twist` commands for
-reproducible demos:
+`scenarios/` 内の JSON ファイルは、再現性のあるデモ用に `Twist` コマンドの
+タイムラインを記述します:
 
 ```json
 {
@@ -176,62 +172,59 @@ reproducible demos:
 }
 ```
 
-Commands are applied in timestamp order; the final state is held until
-`duration_seconds`, then the robot stops.
+コマンドは `timestamp` 順に適用され、最後のコマンドの状態は `duration_seconds`
+まで保持された後、ロボットは停止します。
 
-## Safety constraints (control_logic)
+## 安全制約（control_logic）
 
-| Constraint | Default |
+| 制約 | 既定値 |
 |------------|---------|
-| Max linear speed | 2.0 m/s (clip) |
-| Max angular speed | 2.0 rad/s (clip) |
-| Max acceleration | 1.0 m/s² (rate limit) |
-| Max angular acceleration | 1.0 rad/s² (rate limit) |
-| Smoothing | exponential filter, α = 0.3 |
-| Emergency stop | `/emergency_stop` (`std_msgs/Bool`) → forced stop |
-| Contact stop | `/contact` (`std_msgs/Bool`) → forced stop (optional) |
+| 最大並進速度 | 2.0 m/s（クリップ） |
+| 最大角速度 | 2.0 rad/s（クリップ） |
+| 最大加速度 | 1.0 m/s²（レート制限） |
+| 最大角加速度 | 1.0 rad/s²（レート制限） |
+| 平滑化 | 指数フィルタ, α = 0.3 |
+| 緊急停止 | `/emergency_stop`（`std_msgs/Bool`）→ 強制停止 |
+| 接触停止 | `/contact`（`std_msgs/Bool`）→ 強制停止（任意） |
 
-All tunable via CLI flags (see `control_logic/src/README.md`).
+すべて CLI フラグで調整可能です（`control_logic/src/README.md` 参照）。
 
-## Testing
+## テスト
 
 ```bash
-# Headless unit tests for the safety pipeline (no Docker / ROS required):
+# 安全パイプラインのヘッドレス単体テスト（Docker / ROS 不要）:
 python3 -m unittest discover -s control_logic/tests
 
-# Full integration tests (requires Docker):
-bash test_integration.sh          # add --quick to skip the long scenario
+# フル統合テスト（Docker が必要）:
+bash test_integration.sh          # --quick で長いシナリオをスキップ
 ```
 
-The integration suite checks container startup, ROS communication, E2E latency
-(target < 100 ms) and scenario playback, with a tree-formatted summary.
+統合テストはコンテナ起動・ROS 通信・E2E 遅延（目標 100 ms 未満）・シナリオ再生を
+ツリー形式のサマリーで検証します。
 
-## Robot
+## ロボット
 
-`simple_robot` is a differential-drive robot: a 0.5×0.3×0.2 m box chassis
-(10 kg), two 0.05 m drive wheels (continuous joints, 5 rad/s limit), and a
-front caster. Defined in `gazebo_simulator/models/simple_robot/simple_robot.urdf`
-with inertials, friction, an Ignition DiffDrive plugin and an IMU sensor.
+`simple_robot` は差動二輪ロボットです: 0.5×0.3×0.2 m のボックス車体（10 kg）、
+0.05 m の駆動輪2輪（continuous ジョイント、5 rad/s 制限）、前方キャスター。
+`gazebo_simulator/models/simple_robot/simple_robot.urdf` に慣性・摩擦・Ignition
+DiffDrive プラグイン・IMU センサとともに定義されています。
 
-## Known caveats
+## 既知の注意点
 
-This project targets **ROS Noetic (ROS1)** together with **Gazebo Ignition
-Fortress**, which are different ecosystem generations; bridging them is the
-main source of risk:
+本プロジェクトは **ROS Noetic（ROS1）** と **Gazebo Ignition Fortress** を併用します。
+両者は世代の異なるエコシステムであり、これらの橋渡しが主なリスク要因です:
 
-- The `gazebo` container layers ROS Noetic + the `ros_ign` bridge onto the
-  Ignition image, and serves the GUI over **noVNC** (gzweb is
-  Gazebo-Classic-only). The bridge package's apt availability for
-  Noetic+Fortress can vary; a source-build fallback is documented in
-  `gazebo_simulator/Dockerfile`.
-- Ignition's default physics engine is DART; the world's `<physics type="ode">`
-  settings are honored where supported.
-- The robot spawns at `z=0.5` and settles onto its wheels (~0.13 m).
+- `gazebo` コンテナは Ignition イメージ上に ROS Noetic + `ros_ign` bridge を重ね、
+  GUI を **noVNC** で配信します（gzweb は Gazebo Classic 専用のため）。bridge パッケージ
+  の apt 可用性は Noetic+Fortress の組み合わせで変動し得ます。ソースビルドの
+  フォールバックは `gazebo_simulator/Dockerfile` に記載しています。
+- Ignition の既定物理エンジンは DART です。ワールドの `<physics type="ode">` 設定は
+  対応する範囲で反映されます。
+- ロボットは `z=0.5` でスポーンし、車輪上（約 0.13 m）に着地します。
 
-The Python nodes, scenarios and safety pipeline are verified headless. The full
-Docker/Gazebo build and runtime should be validated on a real Docker host.
-```
+Python ノード・シナリオ・安全パイプラインはヘッドレスで検証済みです。フルの
+Docker/Gazebo ビルドとランタイムは、実際の Docker ホストでの検証が必要です。
 
-## License
+## ライセンス
 
-See repository.
+リポジトリを参照してください。
