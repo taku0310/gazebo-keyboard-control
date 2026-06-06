@@ -1,0 +1,11 @@
+# Control Logic container Python dependencies
+#
+# rclpy, geometry_msgs and std_msgs ship with the ROS 2 Jazzy base image and
+# are resolved via the sourced ROS environment, not pip. Listed for reference.
+#
+# rclpy            (provided by ros:jazzy)
+# geometry_msgs    (provided by ros:jazzy)
+# std_msgs         (provided by ros:jazzy)
+#
+# No third-party pip dependencies; the node uses only the Python standard
+# library plus ROS 2. This file is intentionally minimal.

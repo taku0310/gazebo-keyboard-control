@@ -1,0 +1,136 @@
+<?xml version="1.0" ?>
+<!--
+  empty.world - flat ground demo world for simple_robot.
+
+  SDF world with a 1 ms physics step, a 100x100 ground plane, a zenith sun,
+  white ambient light and a light-blue sky background.
+
+  The target runtime is Gazebo Sim Harmonic, so the gz-sim system plugins
+  (Physics, UserCommands, SceneBroadcaster, Imu, Contact) are declared here.
+  Imu produces the robot's IMU; Contact powers the collision/contact reporting
+  that feeds control_logic's /contact stop. The rendering Sensors system
+  (gz-sim-sensors-system) is intentionally NOT loaded - there are no
+  rendering-based sensors (camera/lidar) on this robot, and loading it under
+  software GL adds overhead and a known crash class.
+
+  Note on physics: Harmonic uses DART by default. Only <max_step_size> and
+  <real_time_*> reliably apply across engines; ODE-specific <solver>/
+  <constraints> blocks are NOT honored on DART. They were removed to avoid
+  giving the impression contact tuning happens here.
+-->
+<sdf version="1.8">
+  <world name="empty">
+
+    <!-- ============================ Physics ============================ -->
+    <physics name="1ms" type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <!-- ==================== Gazebo Sim (Harmonic) systems ============== -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <!-- Imu reads the <sensor type="imu"> in the robot URDF. No rendering
+         Sensors system is needed (no camera/lidar). -->
+    <plugin filename="gz-sim-imu-system"
+            name="gz::sim::systems::Imu"/>
+    <!-- Contact system enables collision/contact reporting. -->
+    <plugin filename="gz-sim-contact-system"
+            name="gz::sim::systems::Contact"/>
+
+    <!-- ============================ Gravity =========================== -->
+    <gravity>0 0 -9.81</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+
+    <!-- ===================== Scene / lighting / sky ==================== -->
+    <scene>
+      <!-- White ambient light, intensity 1.0. -->
+      <ambient>1.0 1.0 1.0 1.0</ambient>
+      <!-- Light-blue (sky-like) background. -->
+      <background>0.7 0.85 1.0 1.0</background>
+      <!-- 1 m grid on the ground for scale. -->
+      <grid>true</grid>
+      <shadows>true</shadows>
+    </scene>
+
+    <!-- ============================== Sun ============================= -->
+    <!-- Zenith sun shining straight down, white, intensity 1.0. -->
+    <light name="sun" type="directional">
+      <pose>0 0 10 0 0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1.0</intensity>
+      <diffuse>1.0 1.0 1.0 1.0</diffuse>
+      <specular>0.2 0.2 0.2 1.0</specular>
+      <direction>0 0 -1</direction>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+    </light>
+
+    <!-- ========================= Ground plane ========================= -->
+    <!-- 100 m x 100 m static plane at the origin. -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <cast_shadows>false</cast_shadows>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <!-- Neutral grey plane; the scene grid above draws the 1 m squares.
+               A true checker pattern would need a tiled texture/material
+               script (cosmetic only). -->
+          <material>
+            <ambient>0.8 0.8 0.8 1.0</ambient>
+            <diffuse>0.8 0.8 0.8 1.0</diffuse>
+            <specular>0.2 0.2 0.2 1.0</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ============================= Robot ============================ -->
+    <!-- simple_robot spawned at the origin, facing +X (0 deg yaw).
+         Spec places it at z=0.5; it falls and settles onto its wheels
+         (rest height ~0.13 m). Lower this z to avoid the initial drop.
+         Requires the model to be discoverable as model://simple_robot
+         (model.config + resource path are set up in the Gazebo container). -->
+    <include>
+      <uri>model://simple_robot</uri>
+      <name>simple_robot</name>
+      <pose>0 0 0.5 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

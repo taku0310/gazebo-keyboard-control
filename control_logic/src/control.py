@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Control Logic node (ROS 2 / rclpy).
+
+Subscribes to ``/cmd_vel`` (raw user commands), applies safety constraints
+and smoothing, then republishes the result to ``/gazebo/cmd_vel`` for the
+simulator.
+
+Constraint pipeline (applied in order):
+  1. Velocity limits   - clip linear/angular speed to a max.
+  2. Acceleration limits - cap the per-cycle change (rate limiting).
+  3. Exponential smoothing - low-pass filter (alpha) to remove jitter.
+  4. Safety rules      - emergency stop / contact-triggered stop (optional).
+
+Designed to run at a fixed control rate (20 Hz) with < 10 ms processing
+latency per cycle.
+"""
+
+import argparse
+import sys
+import time
+
+try:
+    import rclpy
+    from rclpy.node import Node
+    from geometry_msgs.msg import Twist
+    from std_msgs.msg import Bool
+    _ROS_AVAILABLE = True
+except ImportError:  # pragma: no cover - allows --dry-run without ROS 2
+    _ROS_AVAILABLE = False
+
+
+# --------------------------------------------------------------------------- #
+# Constants / defaults
+# --------------------------------------------------------------------------- #
+NODE_NAME = "control_logic"
+INPUT_TOPIC = "/cmd_vel"
+OUTPUT_TOPIC = "/gazebo/cmd_vel"
+ESTOP_TOPIC = "/emergency_stop"
+CONTACT_TOPIC = "/contact"
+CONTROL_RATE_HZ = 20.0
+
+DEFAULT_MAX_LINEAR_SPEED = 2.0    # m/s
+DEFAULT_MAX_ANGULAR_SPEED = 2.0   # rad/s
+DEFAULT_MAX_ACCEL = 1.0           # m/s^2
+DEFAULT_MAX_ANGULAR_ACCEL = 1.0   # rad/s^2
+DEFAULT_ALPHA = 0.3               # exponential filter coefficient (0..1)
+
+
+def clip(value, limit):
+    """Clip ``value`` to the symmetric range [-limit, +limit]."""
+    if value > limit:
+        return limit
+    if value < -limit:
+        return -limit
+    return value
+
+
+def rate_limit(target, current, max_delta):
+    """Limit the change from ``current`` toward ``target`` to ``max_delta``."""
+    delta = target - current
+    if delta > max_delta:
+        return current + max_delta
+    if delta < -max_delta:
+        return current - max_delta
+    return target
+
+
+class ControlLogic:
+    """Apply safety constraints and smoothing to velocity commands."""
+
+    def __init__(self,
+                 max_linear_speed=DEFAULT_MAX_LINEAR_SPEED,
+                 max_angular_speed=DEFAULT_MAX_ANGULAR_SPEED,
+                 max_accel=DEFAULT_MAX_ACCEL,
+                 max_angular_accel=DEFAULT_MAX_ANGULAR_ACCEL,
+                 alpha=DEFAULT_ALPHA,
+                 control_rate_hz=CONTROL_RATE_HZ,
+                 enable_contact_stop=True,
+                 use_sim_time=False,
+                 dry_run=False):
+        self.enable_contact_stop = enable_contact_stop
+        self.max_linear_speed = max_linear_speed
+        self.max_angular_speed = max_angular_speed
+        self.max_accel = max_accel
+        self.max_angular_accel = max_angular_accel
+        self.alpha = alpha
+        self.control_rate_hz = control_rate_hz
+        # Nominal dt; the live control loop measures the real elapsed time per
+        # cycle (see _control_cycle) so accel/smoothing track wall behavior
+        # even if the timer slips. Kept here as a default for unit tests that
+        # do not pass dt explicitly.
+        self.dt = 1.0 / control_rate_hz
+        self.use_sim_time = use_sim_time
+        self.dry_run = dry_run or not _ROS_AVAILABLE
+
+        # Most recent raw command (target) received from /cmd_vel.
+        self.target_linear = 0.0
+        self.target_angular = 0.0
+
+        # Current (published) state - what the robot is actually commanded.
+        self.cur_linear = 0.0
+        self.cur_angular = 0.0
+
+        # Filtered state for exponential smoothing.
+        self.filt_linear = 0.0
+        self.filt_angular = 0.0
+
+        # Safety
+        self.emergency_stop = False
+        self.contact = False
+
+        # Diagnostics
+        self.last_proc_ms = 0.0
+
+        # Log throttling: category -> last-logged monotonic time (seconds).
+        # Prevents per-cycle log spam (which would also threaten the latency
+        # budget) during continuous ramping / clipping.
+        self._log_interval = 1.0
+        self._last_log = {}
+
+        self.node = None
+        self.pub = None
+        self.sub = None
+        self.estop_sub = None
+        self.contact_sub = None
+
+        # Timestamp of the last control cycle (monotonic), used to compute the
+        # real dt instead of trusting the timer period exactly. None until the
+        # first cycle runs.
+        self._last_cycle_t = None
+
+        if not self.dry_run:
+            if not rclpy.ok():
+                rclpy.init()
+            self.node = Node(NODE_NAME)
+            # Optional sim-time: when Gazebo publishes /clock via the bridge,
+            # rclpy timers and timestamps follow simulated time.
+            if self.use_sim_time:
+                from rclpy.parameter import Parameter
+                self.node.set_parameters([
+                    Parameter("use_sim_time", Parameter.Type.BOOL, True),
+                ])
+            self.pub = self.node.create_publisher(Twist, OUTPUT_TOPIC, 10)
+            self.sub = self.node.create_subscription(
+                Twist, INPUT_TOPIC, self.cmd_vel_callback, 10)
+            self.estop_sub = self.node.create_subscription(
+                Bool, ESTOP_TOPIC, self.estop_callback, 1)
+            if self.enable_contact_stop:
+                self.contact_sub = self.node.create_subscription(
+                    Bool, CONTACT_TOPIC, self.contact_callback, 1)
+            self.node.get_logger().info(
+                "control_logic started: %s -> %s @ %.0f Hz (contact_stop=%s)"
+                % (INPUT_TOPIC, OUTPUT_TOPIC, control_rate_hz,
+                   self.enable_contact_stop))
+        else:
+            print("⚠️  control_logic running in dry-run mode (no ROS).")
+
+    # ------------------------------------------------------------------ #
+    # Callbacks
+    # ------------------------------------------------------------------ #
+    def cmd_vel_callback(self, msg):
+        """Store the latest raw command as the control target."""
+        self.target_linear = msg.linear.x
+        self.target_angular = msg.angular.z
+
+    def estop_callback(self, msg):
+        """Toggle the emergency-stop flag."""
+        engaged = bool(msg.data)
+        if engaged and not self.emergency_stop:
+            print("🛑 EMERGENCY STOP engaged.")
+        elif not engaged and self.emergency_stop:
+            print("✅ Emergency stop released.")
+        self.emergency_stop = engaged
+
+    def contact_callback(self, msg):
+        """Force a stop while a contact/collision is reported (optional)."""
+        touching = bool(msg.data)
+        if touching and not self.contact:
+            print("🚧 Contact detected -> forcing stop.")
+        elif not touching and self.contact:
+            print("✅ Contact cleared.")
+        self.contact = touching
+
+    def _log_throttled(self, category, message):
+        """Print ``message`` at most once per ``_log_interval`` per category."""
+        now = time.monotonic()
+        last = self._last_log.get(category, 0.0)
+        if now - last >= self._log_interval:
+            self._last_log[category] = now
+            print(message)
+
+    # ------------------------------------------------------------------ #
+    # Constraint pipeline
+    # ------------------------------------------------------------------ #
+    def process(self, target_linear, target_angular, dt=None):
+        """Run the full constraint pipeline for one control cycle.
+
+        ``dt`` is the time elapsed since the previous call (seconds). When
+        omitted, the nominal ``1/control_rate_hz`` is used - that path keeps
+        the unit tests unchanged. The live loop measures the real interval and
+        passes it in, so acceleration limits track wall behavior even if the
+        timer slips.
+
+        Returns the (linear, angular) command to publish and mutates the
+        controller's current/filtered state.
+        """
+        start = time.perf_counter()
+        if dt is None:
+            dt = self.dt
+        # Clamp dt to a sane range. A zero/negative dt would let infinite
+        # acceleration through; an absurdly large dt (timer paused, sim time
+        # jump) would let the velocity step through the rate limiter and
+        # defeat the smoothing. Cap at 10x the nominal cycle.
+        dt = max(1e-4, min(dt, 10.0 * self.dt))
+
+        # --- Safety: emergency stop / contact override everything ------- #
+        if self.emergency_stop or (self.enable_contact_stop and self.contact):
+            target_linear = 0.0
+            target_angular = 0.0
+
+        # --- 1. Velocity limits (clip) ---------------------------------- #
+        cmd_linear = clip(target_linear, self.max_linear_speed)
+        cmd_angular = clip(target_angular, self.max_angular_speed)
+        # Velocity clipping is a genuine constraint violation (upstream sent an
+        # out-of-range command), so warn - throttled to avoid log spam.
+        if cmd_linear != target_linear:
+            self._log_throttled(
+                "clip_linear",
+                "⚠️  linear.x %.2f exceeds max %.2f -> clipped"
+                % (target_linear, self.max_linear_speed))
+        if cmd_angular != target_angular:
+            self._log_throttled(
+                "clip_angular",
+                "⚠️  angular.z %.2f exceeds max %.2f -> clipped"
+                % (target_angular, self.max_angular_speed))
+
+        # --- 2. Acceleration limits (rate limit per cycle) -------------- #
+        # Rate limiting is normal smoothing behavior (fires on every ramp), so
+        # it is not logged per-cycle.
+        max_dv = self.max_accel * dt
+        max_dw = self.max_angular_accel * dt
+        rl_linear = rate_limit(cmd_linear, self.cur_linear, max_dv)
+        rl_angular = rate_limit(cmd_angular, self.cur_angular, max_dw)
+
+        # --- 3. Exponential smoothing (low-pass) ------------------------ #
+        self.filt_linear = (self.alpha * rl_linear
+                            + (1.0 - self.alpha) * self.filt_linear)
+        self.filt_angular = (self.alpha * rl_angular
+                             + (1.0 - self.alpha) * self.filt_angular)
+
+        # Re-clip after filtering for safety (filter can't add energy, but be
+        # defensive against parameter mistakes).
+        out_linear = clip(self.filt_linear, self.max_linear_speed)
+        out_angular = clip(self.filt_angular, self.max_angular_speed)
+
+        # Commit current state.
+        self.cur_linear = out_linear
+        self.cur_angular = out_angular
+
+        self.last_proc_ms = (time.perf_counter() - start) * 1000.0
+        return out_linear, out_angular
+
+    # ------------------------------------------------------------------ #
+    # Publish
+    # ------------------------------------------------------------------ #
+    def _publish(self, linear, angular):
+        if self.dry_run:
+            return
+        twist = Twist()
+        twist.linear.x = linear
+        twist.linear.y = 0.0
+        twist.linear.z = 0.0
+        twist.angular.x = 0.0
+        twist.angular.y = 0.0
+        twist.angular.z = angular
+        self.pub.publish(twist)
+
+    # ------------------------------------------------------------------ #
+    # Control loop
+    # ------------------------------------------------------------------ #
+    def _publish_stop(self):
+        """Publish a single zero-velocity command so the robot halts."""
+        self.cur_linear = 0.0
+        self.cur_angular = 0.0
+        self.filt_linear = 0.0
+        self.filt_angular = 0.0
+        self._publish(0.0, 0.0)
+
+    def _control_cycle(self):
+        """One control cycle: run the pipeline and publish (timer callback)."""
+        now = time.monotonic()
+        if self._last_cycle_t is None:
+            dt = self.dt
+        else:
+            dt = now - self._last_cycle_t
+        self._last_cycle_t = now
+        linear, angular = self.process(self.target_linear, self.target_angular,
+                                       dt=dt)
+        self._publish(linear, angular)
+        if self.last_proc_ms > 10.0:
+            self._log_throttled(
+                "latency",
+                "⚠️  control_logic processing %.2f ms > 10 ms budget"
+                % self.last_proc_ms)
+
+    def spin(self):
+        if self.dry_run:
+            print("⚠️  dry-run: control loop not started "
+                  "(use process() directly for testing).")
+            return
+        # A timer drives the fixed-rate control cycle; rclpy.spin services both
+        # the timer and the /cmd_vel, /emergency_stop, /contact subscriptions.
+        self.node.create_timer(self.dt, self._control_cycle)
+        try:
+            rclpy.spin(self.node)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # Halt the robot so it does not keep moving with the last command
+            # after the node shuts down.
+            try:
+                self._publish_stop()
+            except Exception:
+                pass
+            self.node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Control Logic safety node")
+    parser.add_argument("--max-linear", type=float,
+                        default=DEFAULT_MAX_LINEAR_SPEED)
+    parser.add_argument("--max-angular", type=float,
+                        default=DEFAULT_MAX_ANGULAR_SPEED)
+    parser.add_argument("--max-accel", type=float, default=DEFAULT_MAX_ACCEL)
+    parser.add_argument("--max-angular-accel", type=float,
+                        default=DEFAULT_MAX_ANGULAR_ACCEL)
+    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
+    parser.add_argument("--rate", type=float, default=CONTROL_RATE_HZ)
+    parser.add_argument("--no-contact-stop", action="store_true",
+                        help="Disable the optional contact-triggered stop.")
+    parser.add_argument("--use-sim-time", action="store_true",
+                        help="Follow Gazebo's /clock (set rclpy use_sim_time).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Run without ROS (for local testing).")
+    # Strip ROS 2 args (--ros-args ...) before argparse when rclpy is present,
+    # then warn about any other unknown args so typos are not silently dropped.
+    if argv is None:
+        argv = sys.argv[1:]
+    if _ROS_AVAILABLE:
+        from rclpy.utilities import remove_ros_args
+        argv = remove_ros_args(args=["prog"] + list(argv))[1:]
+    args, unknown = parser.parse_known_args(argv)
+    if unknown:
+        print("⚠️  Ignoring unknown argument(s): %s" % " ".join(unknown))
+    return args
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    node = ControlLogic(
+        max_linear_speed=args.max_linear,
+        max_angular_speed=args.max_angular,
+        max_accel=args.max_accel,
+        max_angular_accel=args.max_angular_accel,
+        alpha=args.alpha,
+        control_rate_hz=args.rate,
+        enable_contact_stop=not args.no_contact_stop,
+        use_sim_time=args.use_sim_time,
+        dry_run=args.dry_run,
+    )
+    node.spin()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:  # pragma: no cover - top-level guard
+        print("❌ fatal: %s" % exc, file=sys.stderr)
+        sys.exit(1)

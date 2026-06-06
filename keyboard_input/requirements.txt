@@ -1,0 +1,10 @@
+# Keyboard Controller container Python dependencies
+#
+# Note: rclpy / geometry_msgs ship with the ROS 2 Jazzy base image and are
+# resolved via the sourced ROS environment (setup.bash), not pip. They are
+# listed here for documentation only.
+#
+# rclpy            (provided by ros:jazzy)
+# geometry_msgs    (provided by ros:jazzy)
+
+pynput==1.7.6

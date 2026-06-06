@@ -1,0 +1,54 @@
+# Overlay that switches DDS discovery from the default Simple (multicast)
+# transport to Fast DDS Discovery Server (unicast).
+#
+# Why use this overlay:
+#   Multicast across Docker bridge networks is unreliable - some kernels and
+#   most Docker Desktop VMs drop the IGMP packets that Simple discovery relies
+#   on, leaving the three ROS 2 nodes unable to find each other (no error, no
+#   logs, the topic graph is just empty).
+#
+#   This overlay adds a small `discovery_server` sidecar (the same Fast DDS
+#   binary already shipped in ros-jazzy) and points every node at it via
+#   ROS_DISCOVERY_SERVER. Discovery becomes pure TCP/UDP unicast, which is
+#   exactly what Docker bridges forward reliably.
+#
+# How to use:
+#   docker compose -f docker-compose.yml -f docker-compose.discovery.yml up -d
+#   # ...or start the discovery-only stack:
+#   docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#     up -d discovery_server control_logic gazebo
+#
+# Notes:
+#   - Fast DDS Discovery Server listens on UDP 11811 by default.
+#   - All services here use RMW_IMPLEMENTATION=rmw_fastrtps_cpp because the
+#     Discovery Server feature is Fast DDS-specific.
+services:
+  discovery_server:
+    image: ros:jazzy-ros-base
+    command: >
+      bash -lc "source /opt/ros/jazzy/setup.bash &&
+                fastdds discovery -i 0"
+    networks:
+      - ros_net
+    restart: unless-stopped
+
+  keyboard_controller:
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_DISCOVERY_SERVER=discovery_server:11811
+    depends_on:
+      - discovery_server
+
+  control_logic:
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_DISCOVERY_SERVER=discovery_server:11811
+    depends_on:
+      - discovery_server
+
+  gazebo:
+    environment:
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - ROS_DISCOVERY_SERVER=discovery_server:11811
+    depends_on:
+      - discovery_server
