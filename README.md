@@ -63,28 +63,90 @@ for reproducible demos. Runs the same way on macOS, WSL2 and Ubuntu.
     └── demo_scenario_02.json   # "Square Pattern"
 ```
 
-## Quick start
+## Prerequisites（前提条件）
 
-Requires Docker + Docker Compose.
+- **Docker** (Engine 20.10+) and **Docker Compose** v2 (`docker compose`) — or
+  legacy v1 (`docker-compose`); both are auto-detected by the launchers.
+- One of: **macOS** (Docker Desktop), **WSL2** on Windows (Docker Desktop with
+  the WSL2 backend), or **Ubuntu/Linux** (Docker Engine).
+- A web browser (to view the simulator at `localhost:8080`).
+- No local Python/ROS install is needed — everything runs in containers. (The
+  optional headless unit tests need only Python 3.)
+
+## Setup（導入手順）
 
 ```bash
-# Manual keyboard control (W/A/S/D, arrows, etc.):
-bash run_keyboard.sh
+# 1. Clone the repository
+git clone https://github.com/taku0310/gazebo-keyboard-control.git
+cd gazebo-keyboard-control
 
-# Replay a scenario (press SPACE to start, or use --auto):
-bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json --auto
+# 2. Build the container images (first run only; takes a while for Gazebo)
+docker compose build
+
+# 3. (Optional) sanity-check the compose file and run the headless unit tests
+docker compose config >/dev/null && echo "compose OK"
+python3 -m unittest discover -s control_logic/tests
 ```
 
-On Windows:
+> The `gazebo` image is large (Ignition Fortress + ROS Noetic + the ros_ign
+> bridge + noVNC). The first `build` will take several minutes; later runs are
+> cached. See **Known caveats** below for the ROS Noetic ↔ Ignition Fortress
+> bridge notes.
 
+## Usage（実施手順）
+
+The launcher scripts start the backing services (`ros_master`, `control_logic`,
+`gazebo`) detached, wait for ROS Master, then run the keyboard controller
+interactively. `Ctrl+C` stops and tears down everything.
+
+### 1. Manual keyboard control
+
+```bash
+# macOS / Linux / WSL2
+bash run_keyboard.sh
+```
+```powershell
+# Windows
+.\run_keyboard.ps1
+```
+
+Drive the robot with the keys below, and watch it move in the browser at
+**http://localhost:8080**.
+
+### 2. Scenario playback（自動再生）
+
+```bash
+# Load a scenario, then press SPACE to start:
+bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json
+
+# Or auto-play on startup and exit when finished (reproducible demo):
+bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json --auto
+```
 ```powershell
 .\run_keyboard.ps1 -Scenario "scenarios/demo_scenario_01.json" -Auto
 ```
 
-Open the simulator in a browser at **http://localhost:8080** (noVNC).
+Optional flags: `--log <file>` to tee output to a log file; `bash run_keyboard.sh --help`.
 
-The launcher starts the backing services detached, waits for ROS Master, then
-runs the keyboard controller interactively. `Ctrl+C` stops everything.
+### 3. View the simulation
+
+Open **http://localhost:8080** in a browser (noVNC streams the Gazebo GUI).
+
+### 4. Stop
+
+Press `Ctrl+C` in the launcher terminal — it runs `docker compose down` to stop
+all containers. To stop manually: `docker compose down`.
+
+### 5. Run tests
+
+```bash
+# Headless unit tests (no Docker/ROS needed):
+python3 -m unittest discover -s control_logic/tests
+
+# Full integration tests (requires Docker):
+bash test_integration.sh            # --quick to skip the long scenario
+```
+
 
 ### Key bindings
 
