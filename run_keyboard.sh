@@ -16,11 +16,11 @@
 #   -h | --help        Show this help.
 #
 # Notes:
-#   The keyboard controller is launched with `docker compose run` (not
-#   `exec`): the keyboard_controller service's default command already starts
-#   the controller, and in a headless `up -d` container pynput cannot attach,
-#   so the container would exit and `exec` would have nothing to attach to.
-#   `run` gives a fresh, interactive (tty) instance with the requested args.
+#   The keyboard controller is launched with `docker compose run -it` (not
+#   `exec`): the controller defaults to stdin input mode when a TTY is
+#   attached, which is the only reliable live-input path inside a container
+#   (pynput needs a display backend the container does not have). `run -it`
+#   gives a fresh interactive instance with the requested args.
 
 set -euo pipefail
 

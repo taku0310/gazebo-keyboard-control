@@ -12,7 +12,7 @@ services:
   keyboard_controller:
     build: ./keyboard_input
     environment:
-      - ROS_DOMAIN_ID=42
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
     networks:
       - ros_net
     stdin_open: true
@@ -26,7 +26,7 @@ services:
   control_logic:
     build: ./control_logic
     environment:
-      - ROS_DOMAIN_ID=42
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
     networks:
       - ros_net
 
@@ -38,7 +38,7 @@ services:
   gazebo:
     build: ./gazebo_simulator
     environment:
-      - ROS_DOMAIN_ID=42
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
       - WORLD_FILE=/root/.gazebo/worlds/empty.world
     ports:
       - "8080:8080"

@@ -160,11 +160,19 @@ docker compose exec control_logic bash -lc \
 ```
 
 **解決:**
-- `docker-compose.yml` の全サービスに同じ `ROS_DOMAIN_ID=42` があるか確認。
+- `docker-compose.yml` の全サービスに同じ `ROS_DOMAIN_ID`（既定 42）があるか確認。
+  別スタックと干渉している場合は `ROS_DOMAIN_ID=99 docker compose up -d` のように
+  ホスト側で上書きして分離。
 - 全サービスが同じ `ros_net` に接続しているか確認（2-3 参照）。
-- それでも探索しない場合、DDS のマルチキャスト不通が疑わしいので、Fast DDS の
-  discovery 設定（例: ピアの明示指定や discovery server）を検討。まずは
-  `docker compose down && docker compose up -d` で作り直す。
+- まずは `docker compose down && docker compose up -d` で作り直す。
+- **それでも探索しない場合は Discovery Server に切り替え**（Docker ブリッジ越し
+  のマルチキャスト不通が疑わしい）。本リポジトリ同梱の overlay を使うと
+  ユニキャストの Fast DDS Discovery Server に切り替わります:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.discovery.yml up -d
+  ```
+  `discovery_server` サイドカー + 全ノードの `ROS_DISCOVERY_SERVER` 設定 +
+  `RMW_IMPLEMENTATION=rmw_fastrtps_cpp` が一括で適用されます。
 
 ### 2-2. `Cannot publish to /cmd_vel` / トピックが見えない
 
@@ -307,22 +315,30 @@ python3 -c "import xml.dom.minidom as m; m.parse('gazebo_simulator/models/simple
 
 ### 4-2. `No input received`（キーを押しても動かない）
 
-**原因:** キーボードキャプチャには tty/stdin と表示バックエンドが必要で、
-コンテナ環境では制約があります。
+**入力バックエンドの仕様:** keyboard_controller は2系統の入力に対応します。
+既定 (`--input auto`) は次の優先順で選びます:
+
+1. **stdin (termios)** — TTY が attach されていれば自動選択。**コンテナ内・SSH
+   越しでも表示なしで動く**主要モード。
+2. **pynput** — 表示バックエンド（X/Quartz/Win32）が使えるネイティブ実行時のみ。
+3. **none** — 上記いずれも使えない場合。`--auto` でシナリオ再生のみ可能。
 
 **確認・対策:**
-- **起動スクリプトを使う**: `run_keyboard.sh` / `.ps1` は keyboard_controller を
-  `docker compose run`（対話 tty 付き）で起動します。`docker compose up -d` だけでは
-  キー入力は効きません（ヘッドレスで即終了するのが既知挙動）。
-- **macOS**: `pynput` は **アクセシビリティ権限**が必要な場合があります
+- **起動スクリプトを使う**: `run_keyboard.sh` / `.ps1` は `docker compose run`
+  （対話 TTY 付き）で起動するので、コンテナ内では自動的に stdin モードに
+  なります。`docker compose up -d` だけだとキー入力は効きません。
+- **stdin モード固有**: stdin にはキー離鍵イベントが無いため、最後の入力から
+  約 0.25 秒で「離鍵」とみなされます。**キーを押し続ければ前進し続ける**設計です
+  （OS のキーリピートに依存）。
+- **モードを強制したい場合**: `--input stdin` / `--input pynput` で固定できます。
+- **macOS のネイティブ実行**: pynput を使うなら **アクセシビリティ権限**が必要
   （システム設定 → プライバシーとセキュリティ → アクセシビリティ）。
-- **Linux**: X サーバ／`python3-xlib` が必要。コンテナの設計上、表示が無いと
-  リスナーは起動しません。動作確認だけなら**シナリオ自動再生**が確実:
+- **入力はしているが速度が 0**: 反対キーの同時押し（W+S など）は相殺されます。
+  `R` でリセット、`📊 linear.x=… angular.z=…` のデバッグ表示で状態を確認。
+- **どうしても効かない場合**: シナリオ自動再生で経路の動作確認:
   ```bash
   bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json --auto
   ```
-- **入力はしているが速度が 0**: 反対キーの同時押し（W+S など）は相殺されます。
-  `R` でリセット、`📊 linear.x=… angular.z=…` のデバッグ表示で状態を確認。
 
 ### 4-3. `Scenario file not found`
 

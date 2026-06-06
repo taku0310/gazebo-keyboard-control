@@ -2,40 +2,30 @@
 <!--
   empty.world - flat ground demo world for simple_robot.
 
-  SDF world with an ODE solver (max_step_size 0.001, 50 iterations, contacts
-  enabled), a 100x100 ground plane, a zenith sun, white ambient light and a
-  light-blue sky background.
+  SDF world with a 1 ms physics step, a 100x100 ground plane, a zenith sun,
+  white ambient light and a light-blue sky background.
 
   The target runtime is Gazebo Sim Harmonic, so the gz-sim system plugins
-  (Physics, UserCommands, SceneBroadcaster, Sensors, Imu, Contact) are declared
-  here - Sensors + Imu produce the robot's IMU, Contact the collision/contact
-  detection that feeds control_logic's /contact stop.
+  (Physics, UserCommands, SceneBroadcaster, Imu, Contact) are declared here.
+  Imu produces the robot's IMU; Contact powers the collision/contact reporting
+  that feeds control_logic's /contact stop. The rendering Sensors system
+  (gz-sim-sensors-system) is intentionally NOT loaded - there are no
+  rendering-based sensors (camera/lidar) on this robot, and loading it under
+  software GL adds overhead and a known crash class.
 
-  Note: Harmonic's default physics engine is DART, not ODE; the <physics
-  type="ode"> block and its solver settings are honored where the engine
-  supports them (step size always applies).
+  Note on physics: Harmonic uses DART by default. Only <max_step_size> and
+  <real_time_*> reliably apply across engines; ODE-specific <solver>/
+  <constraints> blocks are NOT honored on DART. They were removed to avoid
+  giving the impression contact tuning happens here.
 -->
 <sdf version="1.8">
   <world name="empty">
 
     <!-- ============================ Physics ============================ -->
-    <physics name="ode_physics" type="ode">
+    <physics name="1ms" type="dart">
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
       <real_time_update_rate>1000</real_time_update_rate>
-      <ode>
-        <solver>
-          <type>quick</type>
-          <iters>50</iters>
-          <sor>1.3</sor>
-        </solver>
-        <constraints>
-          <cfm>0.0</cfm>
-          <erp>0.2</erp>
-          <contact_max_correcting_vel>100.0</contact_max_correcting_vel>
-          <contact_surface_layer>0.001</contact_surface_layer>
-        </constraints>
-      </ode>
     </physics>
 
     <!-- ==================== Gazebo Sim (Harmonic) systems ============== -->
@@ -45,11 +35,8 @@
             name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system"
             name="gz::sim::systems::SceneBroadcaster"/>
-    <!-- Sensors renders sensor data; Imu produces the IMU in the robot URDF. -->
-    <plugin filename="gz-sim-sensors-system"
-            name="gz::sim::systems::Sensors">
-      <render_engine>ogre2</render_engine>
-    </plugin>
+    <!-- Imu reads the <sensor type="imu"> in the robot URDF. No rendering
+         Sensors system is needed (no camera/lidar). -->
     <plugin filename="gz-sim-imu-system"
             name="gz::sim::systems::Imu"/>
     <!-- Contact system enables collision/contact reporting. -->

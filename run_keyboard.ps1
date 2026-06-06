@@ -7,10 +7,10 @@
     waits for ROS Master, then runs the keyboard controller interactively.
 
     The keyboard controller is launched with `docker compose run` rather than
-    `exec`: the keyboard_controller service's default command already starts
-    the controller, and in a headless `up -d` container pynput cannot attach,
-    so the container would exit and `exec` would have nothing to attach to.
-    `run` gives a fresh, interactive instance with the requested args.
+    `exec`: the controller defaults to stdin input mode when a TTY is
+    attached, which is the only reliable live-input path inside a container
+    (pynput needs a display backend the container does not have). `run`
+    gives a fresh interactive instance with the requested args.
 
 .PARAMETER Scenario
     Scenario JSON to load (host path under scenarios\). Optional.

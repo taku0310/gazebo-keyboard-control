@@ -77,6 +77,7 @@ class ControlLogic:
                  alpha=DEFAULT_ALPHA,
                  control_rate_hz=CONTROL_RATE_HZ,
                  enable_contact_stop=True,
+                 use_sim_time=False,
                  dry_run=False):
         self.enable_contact_stop = enable_contact_stop
         self.max_linear_speed = max_linear_speed
@@ -85,7 +86,12 @@ class ControlLogic:
         self.max_angular_accel = max_angular_accel
         self.alpha = alpha
         self.control_rate_hz = control_rate_hz
+        # Nominal dt; the live control loop measures the real elapsed time per
+        # cycle (see _control_cycle) so accel/smoothing track wall behavior
+        # even if the timer slips. Kept here as a default for unit tests that
+        # do not pass dt explicitly.
         self.dt = 1.0 / control_rate_hz
+        self.use_sim_time = use_sim_time
         self.dry_run = dry_run or not _ROS_AVAILABLE
 
         # Most recent raw command (target) received from /cmd_vel.
@@ -119,10 +125,22 @@ class ControlLogic:
         self.estop_sub = None
         self.contact_sub = None
 
+        # Timestamp of the last control cycle (monotonic), used to compute the
+        # real dt instead of trusting the timer period exactly. None until the
+        # first cycle runs.
+        self._last_cycle_t = None
+
         if not self.dry_run:
             if not rclpy.ok():
                 rclpy.init()
             self.node = Node(NODE_NAME)
+            # Optional sim-time: when Gazebo publishes /clock via the bridge,
+            # rclpy timers and timestamps follow simulated time.
+            if self.use_sim_time:
+                from rclpy.parameter import Parameter
+                self.node.set_parameters([
+                    Parameter("use_sim_time", Parameter.Type.BOOL, True),
+                ])
             self.pub = self.node.create_publisher(Twist, OUTPUT_TOPIC, 10)
             self.sub = self.node.create_subscription(
                 Twist, INPUT_TOPIC, self.cmd_vel_callback, 10)
@@ -175,14 +193,26 @@ class ControlLogic:
     # ------------------------------------------------------------------ #
     # Constraint pipeline
     # ------------------------------------------------------------------ #
-    def process(self, target_linear, target_angular):
+    def process(self, target_linear, target_angular, dt=None):
         """Run the full constraint pipeline for one control cycle.
 
+        ``dt`` is the time elapsed since the previous call (seconds). When
+        omitted, the nominal ``1/control_rate_hz`` is used - that path keeps
+        the unit tests unchanged. The live loop measures the real interval and
+        passes it in, so acceleration limits track wall behavior even if the
+        timer slips.
+
         Returns the (linear, angular) command to publish and mutates the
-        controller's current/filtered state. Pure enough to unit-test:
-        feed targets, inspect the returned values.
+        controller's current/filtered state.
         """
         start = time.perf_counter()
+        if dt is None:
+            dt = self.dt
+        # Clamp dt to a sane range. A zero/negative dt would let infinite
+        # acceleration through; an absurdly large dt (timer paused, sim time
+        # jump) would let the velocity step through the rate limiter and
+        # defeat the smoothing. Cap at 10x the nominal cycle.
+        dt = max(1e-4, min(dt, 10.0 * self.dt))
 
         # --- Safety: emergency stop / contact override everything ------- #
         if self.emergency_stop or (self.enable_contact_stop and self.contact):
@@ -208,8 +238,8 @@ class ControlLogic:
         # --- 2. Acceleration limits (rate limit per cycle) -------------- #
         # Rate limiting is normal smoothing behavior (fires on every ramp), so
         # it is not logged per-cycle.
-        max_dv = self.max_accel * self.dt
-        max_dw = self.max_angular_accel * self.dt
+        max_dv = self.max_accel * dt
+        max_dw = self.max_angular_accel * dt
         rl_linear = rate_limit(cmd_linear, self.cur_linear, max_dv)
         rl_angular = rate_limit(cmd_angular, self.cur_angular, max_dw)
 
@@ -259,7 +289,14 @@ class ControlLogic:
 
     def _control_cycle(self):
         """One control cycle: run the pipeline and publish (timer callback)."""
-        linear, angular = self.process(self.target_linear, self.target_angular)
+        now = time.monotonic()
+        if self._last_cycle_t is None:
+            dt = self.dt
+        else:
+            dt = now - self._last_cycle_t
+        self._last_cycle_t = now
+        linear, angular = self.process(self.target_linear, self.target_angular,
+                                       dt=dt)
         self._publish(linear, angular)
         if self.last_proc_ms > 10.0:
             self._log_throttled(
@@ -304,6 +341,8 @@ def parse_args(argv=None):
     parser.add_argument("--rate", type=float, default=CONTROL_RATE_HZ)
     parser.add_argument("--no-contact-stop", action="store_true",
                         help="Disable the optional contact-triggered stop.")
+    parser.add_argument("--use-sim-time", action="store_true",
+                        help="Follow Gazebo's /clock (set rclpy use_sim_time).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run without ROS (for local testing).")
     # Strip ROS 2 args (--ros-args ...) before argparse when rclpy is present,
@@ -329,6 +368,7 @@ def main(argv=None):
         alpha=args.alpha,
         control_rate_hz=args.rate,
         enable_contact_stop=not args.no_contact_stop,
+        use_sim_time=args.use_sim_time,
         dry_run=args.dry_run,
     )
     node.spin()

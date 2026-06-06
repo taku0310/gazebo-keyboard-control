@@ -9,7 +9,7 @@ macOS / WSL2 / Ubuntu で同じように動作します。
 ┌──────────────────┐   /cmd_vel    ┌───────────────┐  /gazebo/cmd_vel  ┌──────────┐
 │ keyboard_         │ ───────────▶ │ control_logic │ ───────────────▶ │  gazebo  │
 │ controller        │   (Twist)     │ (safety/      │     (Twist)       │ (Gazebo  │
-│ (pynput → Twist)  │               │  smoothing)   │                   │ Harmonic)│
+│ (stdin/pynput→Twist)│             │  smoothing)   │                   │ Harmonic)│
 └──────────────────┘               └───────────────┘                   └──────────┘
           │                                 │                                 │
           └─────────────────────────────────┴─────────────────────────────────┘
@@ -24,7 +24,7 @@ ROS 2 はマスターレスです（roscore コンテナはありません）。
 
 | コンテナ | 役割 | 主要技術 |
 |-----------|------|----------|
-| `keyboard_controller` | キーボード入力 → `geometry_msgs/msg/Twist` を `/cmd_vel` に 20 Hz で発行 | Python, rclpy, pynput |
+| `keyboard_controller` | キーボード入力 → `geometry_msgs/msg/Twist` を `/cmd_vel` に 20 Hz で発行 | Python, rclpy, stdin/pynput |
 | `control_logic` | 安全制約 + 平滑化 → `/gazebo/cmd_vel` を発行 | Python, rclpy |
 | `gazebo` | 3D 物理演算 + Web 可視化 | Gazebo Sim Harmonic, ros_gz bridge, noVNC |
 
@@ -221,11 +221,22 @@ DiffDrive プラグイン・IMU センサとともに定義されています。
 
 - `gazebo` コンテナは ROS 2 Jazzy ベースに Gazebo Harmonic（`gz-harmonic`）と
   `ros-jazzy-ros-gz-bridge` を載せ、GUI を **noVNC** で配信します（Gazebo Sim には
-  組み込みの Web UI が無いため）。
-- Gazebo Harmonic の既定物理エンジンは DART です。ワールドの `<physics type="ode">`
-  設定は対応する範囲で反映されます。
+  組み込みの Web UI が無いため）。レンダリング系センサは無いため
+  `gz-sim-sensors-system` は読み込んでいません（IMU は `gz-sim-imu-system` で処理）。
+- Gazebo Harmonic の既定物理エンジンは **DART** です。world では `max_step_size`
+  と `real_time_*` のみ確実に反映されます（ODE 専用の solver/constraints 設定は
+  DART では無効なので、混乱を避けるため world から削除しています）。
 - ロボットは `z=0.5` でスポーンし、車輪上（約 0.13 m）に着地します。
+- **キー入力**は既定で TTY が attach されていれば `stdin (termios)`、なければ
+  pynput（表示が必要）の順で自動選択されます。コンテナ内では stdin モードが
+  使われるため、ホストの表示バックエンドに依存しません。`--input stdin` /
+  `--input pynput` で明示指定も可能です。
 - ROS 2 はマスターレスで、ノードは同じ `ROS_DOMAIN_ID` のもと DDS で相互探索します。
+  Docker ブリッジ越しのマルチキャストが不安定な環境（一部 Docker Desktop など）
+  では、同梱の `docker-compose.discovery.yml` overlay で **Fast DDS Discovery
+  Server**（ユニキャスト）に切り替えられます。
+- `ROS_DOMAIN_ID` は環境変数で上書き可能（既定 42）。
+  例: `ROS_DOMAIN_ID=99 docker compose up -d` で別スタックと分離できます。
 
 Python ノード・シナリオ・安全パイプラインはヘッドレスで検証済みです。フルの
 Docker/Gazebo ビルドとランタイムは、実際の Docker ホストでの検証が必要です。

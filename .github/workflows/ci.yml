@@ -29,6 +29,10 @@ jobs:
         run: |
           python -m unittest discover -s control_logic/tests -v
 
+      - name: keyboard_input unit tests (headless)
+        run: |
+          python -m unittest discover -s keyboard_input/tests -v
+
       - name: keyboard_controller scenario smoke test (dry-run)
         run: |
           # pynput is intentionally not installed; the module's lazy import
