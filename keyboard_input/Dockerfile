@@ -2,17 +2,20 @@
 #
 # The controller no longer touches ROS: it sends velocity commands as JSON over
 # TCP to the ros_bridge service. So this image is a slim Python image, not a ROS
-# base. Input is via stdin (works headless in containers) with pynput as a
-# native-desktop fallback.
+# base. Input in the container is via stdin/termios (works headless, standard
+# library only); pynput is a native-desktop-only fallback and is deliberately
+# not installed in the image (see requirements.txt).
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install Python dependencies first for better layer caching. pynput pulls
-# python-xlib on Linux automatically; it is only used in the optional native
-# pynput input mode (the container path uses stdin).
+# Install Python dependencies first for better layer caching. requirements.txt
+# is intentionally free of third-party packages (the stdin input path is pure
+# standard library); this step is a no-op today but kept for caching and any
+# future deps. pynput is NOT installed here - it pulls evdev, which fails to
+# build without kernel headers (notably on arm64). See requirements.txt.
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 

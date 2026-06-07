@@ -1,8 +1,17 @@
 # Keyboard Controller container Python dependencies
 #
-# The controller is a ROS-free TCP client (it sends JSON to ros_bridge), so it
-# needs no rclpy. Only pynput is required, and only for the optional native
-# "pynput" input mode; the container path uses stdin (standard library only).
-# On Linux, pynput pulls python-xlib automatically.
-
-pynput==1.7.6
+# Intentionally EMPTY of third-party packages. The containerized controller
+# captures keystrokes via stdin (termios), which is pure standard library, so
+# the image needs nothing from PyPI.
+#
+# Why pynput is NOT listed here:
+#   pynput is only the optional native-desktop "global key capture" backend, and
+#   the container never uses it (no X display -> _resolve_input_mode picks
+#   stdin). On Linux pynput also pulls `evdev`, which ships no prebuilt wheel and
+#   builds from source against kernel headers (linux/input.h). Those headers and
+#   a C toolchain are absent from this slim image, so installing pynput breaks
+#   the build outright - notably on arm64 / Apple Silicon.
+#
+# For local, non-Docker desktop use that wants pynput, install the optional
+# requirements-desktop.txt instead (see that file for the system packages it
+# needs to compile evdev).

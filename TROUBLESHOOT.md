@@ -130,6 +130,36 @@ docker compose build --no-cache --progress=plain gazebo
   docker compose up -d ros_bridge control_logic
   ```
 
+### 1-5. `keyboard_controller` のビルドが `evdev` で失敗する（特に Apple Silicon / arm64）
+
+**症状:** `docker compose build` 中に次のようなエラーで止まる。
+
+```
+Building wheel for evdev (pyproject.toml): finished with status 'error'
+The 'linux/input.h' and 'linux/input-event-codes.h' include files are missing.
+ERROR: Failed to build installable wheels for some pyproject.toml based projects (evdev)
+```
+
+**原因:** これは `keyboard_controller` イメージのビルド失敗です。`evdev` は
+`pynput` の Linux 依存パッケージで、プリビルド wheel が無くソースからビルドされ、
+カーネルヘッダ（`linux/input.h`）と C コンパイラを要求します。`python:3.12-slim`
+にはどちらも無いため、特に arm64（Apple Silicon）で失敗します。イメージが作れない
+ので `run_keyboard.sh` のコントローラが起動できず、**キーボードもシナリオも一切
+コマンドを送れません**（＝ロボットが動かない）。
+
+**解決:** コンテナはキー入力を **stdin（標準ライブラリ）** で取り込むため pynput は
+不要です。本リポジトリの最新版では `keyboard_input/requirements.txt` から pynput を
+除外済みなので、最新を取得して再ビルドしてください。
+
+```bash
+git pull
+docker compose build --no-cache keyboard_controller
+```
+
+> ローカル（非 Docker）でデスクトップの pynput を使いたい場合のみ、任意で
+> `keyboard_input/requirements-desktop.txt` を `pip install` してください
+> （Linux では `python3-dev gcc linux-libc-dev` が必要）。
+
 ---
 
 ## 2. 通信エラー（TCP / ROS）
