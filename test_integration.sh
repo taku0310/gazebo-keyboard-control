@@ -202,11 +202,18 @@ else
 fi
 
 # Publisher active: `ros2 topic info` reports a non-zero publisher count.
-if ros_cli "ros2 topic info /cmd_vel" | \
-   awk -F': ' '/Publisher count/{exit !($2 > 0)}'; then
+# Poll: cross-container DDS discovery can take several seconds (notably on
+# Docker Desktop for Mac/Windows), so retry rather than judging in one shot.
+# The END guard treats empty/failed output as "not yet" so wait_for keeps
+# trying instead of mistaking no output for success.
+has_cmd_vel_publisher() {
+  ros_cli "ros2 topic info /cmd_vel" | \
+    awk -F': ' '/Publisher count/{found=1; exit !($2 > 0)} END{if(!found) exit 1}'
+}
+if wait_for 20 has_cmd_vel_publisher; then
   pass "├─" "Publisher active on /cmd_vel"
 else
-  fail "├─" "No publisher on /cmd_vel"
+  fail "├─" "No publisher on /cmd_vel" "$(ros_cli "ros2 topic info /cmd_vel" | tail -3)"
 fi
 
 # Subscriber active: control_logic republishes to /gazebo/cmd_vel, so receiving
@@ -234,12 +241,14 @@ section "Test 2b: ROS Bridge (TCP -> /cmd_vel)"
 # Send a steady JSON Lines stream to the bridge over TCP (from inside the
 # control_logic container, reaching ros_bridge by service name) and confirm it
 # is republished on /cmd_vel. A distinct value (1.5) proves it is the bridge,
-# not the ros2-topic-pub publisher from Test 2.
+# not the ros2-topic-pub publisher from Test 2. The sender runs long enough to
+# cover cross-container DDS discovery latency while we poll for the value.
 dc exec -T control_logic python3 -c '
 import socket, time
+end = time.time() + 45
 try:
-    s = socket.create_connection(("ros_bridge", 9090), timeout=3)
-    for _ in range(80):  # ~4 s at 20 Hz
+    s = socket.create_connection(("ros_bridge", 9090), timeout=5)
+    while time.time() < end:  # 20 Hz
         s.sendall(b"{\"linear_x\":1.5,\"angular_z\":0.5}\n")
         time.sleep(0.05)
     s.close()
@@ -247,13 +256,19 @@ except OSError:
     pass
 ' >/dev/null 2>&1 &
 TCP_PID=$!
-sleep 1
 
-if ros_cli "timeout 3 ros2 topic echo /cmd_vel" | grep -q "x: 1.5"; then
+# Poll for the bridged value to appear: discovery of the cross-container
+# publisher can take several seconds on Docker Desktop, so a single short echo
+# is not enough.
+bridge_value_seen() {
+  ros_cli "timeout 3 ros2 topic echo /cmd_vel" | grep -q "x: 1.5"
+}
+if wait_for 8 bridge_value_seen; then
   pass "└─" "TCP JSON reached /cmd_vel via ros_bridge"
 else
   fail "└─" "ros_bridge did not republish TCP command to /cmd_vel"
 fi
+kill "$TCP_PID" 2>/dev/null || true
 wait "$TCP_PID" 2>/dev/null || true
 
 # ============================================================================ #
