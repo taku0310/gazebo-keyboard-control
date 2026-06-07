@@ -47,6 +47,14 @@ services:
     environment:
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       - ROS_DISCOVERY_SERVER=discovery_server:11811
+      # Make this container a Discovery Server SUPER_CLIENT. A plain CLIENT only
+      # learns about endpoints it is matched with, so graph-introspection tools
+      # (`ros2 topic list` / `ros2 topic info` / `ros2 topic echo`) - and the
+      # ros2 daemon they share - see an empty/partial graph and report topics or
+      # publishers as missing even when pub/sub itself works. control_logic is
+      # where the integration tests exec all their ros2 CLI checks, so it must be
+      # a SUPER_CLIENT to observe the whole system.
+      - ROS_SUPER_CLIENT=TRUE
     depends_on:
       - discovery_server
 
