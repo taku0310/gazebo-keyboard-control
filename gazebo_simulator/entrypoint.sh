@@ -39,6 +39,27 @@ else
 fi
 x11vnc -display "${DISPLAY_NUM}" -forever -shared "${VNC_AUTH[@]}" \
   -rfbport "${VNC_PORT}" -bg -quiet
+# Make "/" open the viewer directly. The packaged noVNC ships no index.html, so
+# the web server would otherwise serve a bare directory listing (app/, core/,
+# vnc.html, ...). Redirect to the full client and auto-connect to the serving
+# host/port, scaling the remote framebuffer to fit the browser window.
+NOVNC_WEB=/usr/share/novnc
+if [ -d "${NOVNC_WEB}" ] && [ ! -e "${NOVNC_WEB}/index.html" ]; then
+  cat > "${NOVNC_WEB}/index.html" <<'HTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gazebo (noVNC)</title>
+<meta http-equiv="refresh" content="0; url=vnc.html?autoconnect=true&resize=scale">
+</head>
+<body>
+<p>Opening the Gazebo viewer&hellip;
+<a href="vnc.html?autoconnect=true&resize=scale">click here</a> if it does not start.</p>
+</body>
+</html>
+HTML
+fi
 # noVNC ships a launcher; fall back to websockify if not present.
 if [ -x /usr/share/novnc/utils/novnc_proxy ]; then
   /usr/share/novnc/utils/novnc_proxy --vnc "localhost:${VNC_PORT}" --listen "${WEB_PORT}" &
