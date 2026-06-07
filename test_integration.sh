@@ -264,13 +264,15 @@ except OSError:
 ' >/dev/null 2>&1 &
 TCP_PID=$!
 
-# Poll for the bridged value to appear: discovery of the cross-container
-# publisher can take several seconds on Docker Desktop, so a single short echo
-# is not enough.
-bridge_value_seen() {
-  ros_cli "timeout 3 ros2 topic echo /cmd_vel" | grep -q "x: 1.5"
-}
-if wait_for 8 bridge_value_seen; then
+# Use ONE long-lived subscriber rather than repeated short ones. Under the Fast
+# DDS Discovery Server every fresh `ros2 topic echo` is a brand-new participant
+# that must redo the data-channel handshake with ros_bridge; that can take more
+# than a few seconds, and a retry loop of short echoes restarts the handshake
+# from scratch each time, so it can never converge. A single subscriber kept
+# alive long enough completes the handshake once and then receives data. --once
+# returns as soon as the first message arrives - the sender streams 1.5
+# continuously (well inside the 0.5s watchdog), so the first value seen is 1.5.
+if ros_cli "timeout 15 ros2 topic echo --once /cmd_vel" | grep -q "x: 1.5"; then
   pass "└─" "TCP JSON reached /cmd_vel via ros_bridge"
 else
   fail "└─" "ros_bridge did not republish TCP command to /cmd_vel"
