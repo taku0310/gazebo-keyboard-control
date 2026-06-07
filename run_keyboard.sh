@@ -118,6 +118,13 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+# Use the Fast DDS Discovery Server overlay by default. Simple (multicast)
+# discovery is unreliable on Docker Desktop (macOS/Windows) VMs - the IGMP
+# packets get dropped and the ROS nodes silently fail to find each other. The
+# overlay adds a small discovery_server sidecar and switches to unicast, which
+# Docker bridges forward reliably. Harmless on native Linux.
+COMPOSE+=(-f docker-compose.yml -f docker-compose.discovery.yml)
+
 echo "🐳 Using: ${COMPOSE[*]}"
 
 # ---------------------------------------------------------------------------- #
@@ -136,8 +143,8 @@ trap cleanup EXIT INT TERM
 # keyboard_controller is a TCP client of ros_bridge; ros_bridge is the DDS
 # publisher of /cmd_vel. ROS 2 is masterless - nodes discover over DDS.
 # ---------------------------------------------------------------------------- #
-echo "🚀 Starting backing services (ros_bridge, control_logic, gazebo)..."
-if ! "${COMPOSE[@]}" up -d ros_bridge control_logic gazebo; then
+echo "🚀 Starting backing services (discovery_server, ros_bridge, control_logic, gazebo)..."
+if ! "${COMPOSE[@]}" up -d discovery_server ros_bridge control_logic gazebo; then
   echo "❌ Failed to start services. See output above."
   exit 1
 fi

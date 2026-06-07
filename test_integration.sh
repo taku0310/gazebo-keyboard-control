@@ -74,6 +74,13 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+# Use the Fast DDS Discovery Server overlay by default: multicast discovery is
+# unreliable on Docker Desktop (macOS/Windows) VMs, which silently leaves the
+# ROS nodes unable to find each other (and makes discovery-sensitive checks
+# flaky). The overlay switches to unicast via a discovery_server sidecar;
+# harmless on native Linux.
+COMPOSE+=(-f docker-compose.yml -f docker-compose.discovery.yml)
+
 dc() { "${COMPOSE[@]}" "$@"; }
 
 # Run a ROS 2 CLI command inside the (running) control_logic container, which
@@ -131,8 +138,8 @@ section "Test 1: Container Startup"
 # so a headless `up -d` instance would exit immediately - checking it for
 # "running" here would be a guaranteed false failure.
 echo "  🚀 Starting backing services (docker compose up -d)..."
-if ! dc up -d ros_bridge control_logic gazebo >/dev/null 2>&1; then
-  fail "└─" "docker compose up failed" "$(dc up -d ros_bridge control_logic gazebo 2>&1 | tail -3)"
+if ! dc up -d discovery_server ros_bridge control_logic gazebo >/dev/null 2>&1; then
+  fail "└─" "docker compose up failed" "$(dc up -d discovery_server ros_bridge control_logic gazebo 2>&1 | tail -3)"
 else
   # ROS 2 is masterless; wait until the CLI can list topics over DDS.
   wait_for 30 ros_cli "ros2 topic list" || true
