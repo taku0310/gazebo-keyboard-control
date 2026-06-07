@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY src/ /app/src/
 
 # Drop privileges: run as a non-root user (defense in depth).
-RUN useradd -m -u 1000 appuser && chown -R appuser /app
+RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 ENV HOME=/home/appuser
 
