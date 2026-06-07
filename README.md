@@ -150,7 +150,15 @@ bash run_keyboard.sh --scenario scenarios/demo_scenario_01.json --auto
 
 ### 3. シミュレーションの表示
 
-ブラウザで **http://localhost:8080** を開きます（noVNC が Gazebo GUI を配信）。
+ブラウザで **http://localhost:8080** を開くと、noVNC が配信する Gazebo GUI が
+表示されます（自動で接続します）。
+
+> **このブラウザ画面は「見るため」だけ**です。ロボットの操作キーは、`run_keyboard.sh`
+> を実行した**ターミナル**に入力します（キー入力 → ros_bridge → Gazebo）。
+> ブラウザのタブをクリックしてもロボットは動きません。操作はターミナルを前面にした
+> まま行い、動きはブラウザで確認してください。
+>
+> もしルートでファイル一覧（`vnc.html` など）が出る場合は **`vnc.html`** を開いてください。
 
 ### 4. 停止
 
