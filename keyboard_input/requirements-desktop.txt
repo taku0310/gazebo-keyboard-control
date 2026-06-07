@@ -1,0 +1,13 @@
+# OPTIONAL dependencies for running keyboard_input_controller.py directly on a
+# desktop (NOT in the Docker container), when you want pynput's global key
+# capture instead of the default stdin/termios input.
+#
+# The Docker image does NOT use this file - it runs the controller in stdin mode
+# (see requirements.txt for why pynput is excluded from the image).
+#
+# On Linux, pynput pulls `evdev`, which builds from source and therefore needs
+# kernel headers + a C toolchain, e.g.:
+#     sudo apt-get install python3-dev gcc linux-libc-dev
+# On macOS / Windows pynput installs without a compiler.
+
+pynput==1.7.6
